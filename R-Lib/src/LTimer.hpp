@@ -1,0 +1,35 @@
+#pragma once
+
+#include <cstdint>
+#include <functional>
+
+#include "LEventLoop.hpp"
+
+class LTimer : public LEpollHandler
+{
+public:
+    LTimer();
+    ~LTimer() override;
+
+    void start(uint64_t interval);
+    void setInterval(uint64_t msec);
+    void start();
+    void stop();
+
+    //signals
+    void onTimeout(std::function<void()> callback);
+
+    void callOnTimeout()
+    {
+        //TODO: implement
+    }
+
+protected:
+    void handleEpollEvent(uint32_t events) override;
+
+private:
+    LEventLoop *m_loop;
+    int m_timer_fd;
+    uint64_t m_interval_ms;
+    std::function<void()> m_callback;
+};

@@ -6,10 +6,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(R-Lib main.cpp
-    lib/LTimer.hpp
-    lib/LTimer.cpp
-    lib/LEventLoop.hpp
-    lib/LEventLoop.cpp)
+    src/LTimer.hpp
+    src/LTimer.cpp
+    src/LEventLoop.hpp
+    src/LEventLoop.cpp)
 
 include(GNUInstallDirs)
 install(TARGETS R-Lib
