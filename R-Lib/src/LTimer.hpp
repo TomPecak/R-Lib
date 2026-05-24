@@ -16,13 +16,8 @@ public:
     void start();
     void stop();
 
-    //signals
+    //Callbacks
     void onTimeout(std::function<void()> callback);
-
-    void callOnTimeout()
-    {
-        //TODO: implement
-    }
 
 protected:
     void handleEpollEvent(uint32_t events) override;

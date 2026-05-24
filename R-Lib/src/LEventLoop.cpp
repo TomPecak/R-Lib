@@ -15,7 +15,7 @@ LEventLoop::LEventLoop()
     t_currentLoop = this;
     m_epoll_fd = epoll_create1(0);
     if (m_epoll_fd == -1) {
-        std::cerr << "Błąd epoll_create1: " << strerror(errno) << std::endl;
+        std::cerr << "LEventLoop epoll_create1 error: " << strerror(errno) << std::endl;
     }
 }
 
@@ -30,11 +30,10 @@ bool LEventLoop::registerHandler(int fd, uint32_t events, LEpollHandler *handler
 {
     struct epoll_event event;
     event.events = events;
-    // MAGIA: Zamiast trzymać (int fd), trzymamy wskaźnik do obiektu (np. LTimer)!
     event.data.ptr = handler;
 
     if (epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) {
-        std::cerr << "Błąd epoll_ctl ADD: " << strerror(errno) << std::endl;
+        std::cerr << "LEventLoop epoll_ctl ADD error: " << strerror(errno) << std::endl;
         return false;
     }
     return true;
@@ -59,16 +58,14 @@ int LEventLoop::exec()
 
         if (n == -1) {
             if (errno == EINTR)
-                continue; // Zignoruj przerwania od systemu
-            std::cerr << "Błąd epoll_wait: " << strerror(errno) << std::endl;
+                continue; // Ignore system interrupts
+            std::cerr << "LEventLoop epoll_wait error: " << strerror(errno) << std::endl;
             break;
         }
 
         for (int i = 0; i < n; ++i) {
-            // Wyciągamy wskaźnik do naszego obiektu C++
             auto *handler = static_cast<LEpollHandler *>(events[i].data.ptr);
             if (handler) {
-                // Wywołujemy kod konkretnego urządzenia
                 handler->handleEpollEvent(events[i].events);
             }
         }
