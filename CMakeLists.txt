@@ -9,7 +9,9 @@ add_executable(R-Lib main.cpp
     src/LTimer.hpp
     src/LTimer.cpp
     src/LEventLoop.hpp
-    src/LEventLoop.cpp)
+    src/LEventLoop.cpp
+    src/LGpioPin.hpp
+    src/LGpioPin.cpp)
 
 include(GNUInstallDirs)
 install(TARGETS R-Lib

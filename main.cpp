@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "./src/LEventLoop.hpp"
+#include "./src/LGpioPin.hpp"
 #include "./src/LTimer.hpp"
 
 using namespace std;
@@ -30,9 +31,12 @@ int main()
 {
     LEventLoop loop;
 
+    LGpioPin ledPin("/dev/gpiochip4", 17);
+    ledPin.setDirection(LGpioPin::Output);
+
     LTimer timer_1;
     timer_1.onTimeout([]() { std::cout << "Timer_1 event callback!" << std::endl; });
-    timer_1.start(100);
+    timer_1.start(250);
 
     LTimer timer_2;
     timer_2.onTimeout([]() { std::cout << "Timer_2 event!" << std::endl; });
