@@ -12,7 +12,7 @@ LTimer::LTimer()
     : m_timer_fd(-1)
     , m_interval_ms(0)
 {
-    m_loop = LEventLoop::current();
+    LEventLoop *m_loop = LEventLoop::current();
 
     if (m_loop == nullptr) {
         std::cerr << "CRITICAL: No LEventLoop created in this thread!" << std::endl;
@@ -30,6 +30,8 @@ LTimer::LTimer()
 
 LTimer::~LTimer()
 {
+    LEventLoop *m_loop = LEventLoop::current();
+
     if (m_timer_fd != -1) {
         if (m_loop) {
             m_loop->unregisterHandler(m_timer_fd);

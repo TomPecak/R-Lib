@@ -23,7 +23,6 @@ protected:
     void handleEpollEvent(uint32_t events) override;
 
 private:
-    LEventLoop *m_loop;
     int m_timer_fd;
     uint64_t m_interval_ms;
     std::function<void()> m_callback;
