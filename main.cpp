@@ -21,7 +21,8 @@ public:
     Application()
         : tick_count_(0)
     {
-        timer.onTimeout([this]() { this->handle_timeout(); });
+        //timer.onTimeout([this]() { this->handle_timeout(); });
+        timer.onTimeout(this, &Application::handle_timeout);
         timer.start(1);
     }
 
@@ -31,7 +32,7 @@ public:
 
         // Co 1000 wywołań (w przybliżeniu co 1 sekundę) wypisujemy informację na ekran
         if (tick_count_ % 1000 == 0) {
-            std::cout << "LTimer Wywolanie nr: " << tick_count_ << " (Minelo ok. "
+            std::cout << "Application::LTimer Wywolanie nr: " << tick_count_ << " (Minelo ok. "
                       << tick_count_ / 1000 << " s)" << std::endl;
         }
     }

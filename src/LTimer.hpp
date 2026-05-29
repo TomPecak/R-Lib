@@ -19,6 +19,12 @@ public:
     //Callbacks
     void onTimeout(std::function<void()> callback);
 
+    template<typename Object>
+    void onTimeout(Object *obj, void (Object::*method)())
+    {
+        m_callback = [obj, method]() { (obj->*method)(); };
+    }
+
 protected:
     void handleEpollEvent(uint32_t events) override;
 
