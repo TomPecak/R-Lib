@@ -12,6 +12,7 @@ thread_local LEventLoop *t_currentLoop = nullptr;
 LEventLoop::LEventLoop()
     : m_running(false)
 {
+    std::cout << __PRETTY_FUNCTION__ << std::endl;
     t_currentLoop = this;
     m_epoll_fd = epoll_create1(0);
     if (m_epoll_fd == -1) {
@@ -24,6 +25,7 @@ LEventLoop::~LEventLoop()
     t_currentLoop = nullptr;
     close(m_epoll_fd);
     m_epoll_fd = -1;
+    std::cout << __PRETTY_FUNCTION__ << std::endl;
 }
 
 bool LEventLoop::registerHandler(int fd, uint32_t events, LEpollHandler *handler)
@@ -71,6 +73,13 @@ int LEventLoop::exec()
         }
     }
     return 0;
+}
+
+void LEventLoop::quit()
+{
+    if (t_currentLoop) {
+        t_currentLoop->m_running = false;
+    }
 }
 
 LEventLoop *LEventLoop::current()

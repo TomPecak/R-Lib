@@ -19,6 +19,8 @@ public:
 
     int exec();
 
+    static void quit();
+
     static LEventLoop *current();
 
 private:

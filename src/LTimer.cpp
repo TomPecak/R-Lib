@@ -12,6 +12,7 @@ LTimer::LTimer()
     : m_timer_fd(-1)
     , m_interval_ms(0)
 {
+    std::cout << __PRETTY_FUNCTION__ << std::endl;
     LEventLoop *m_loop = LEventLoop::current();
 
     if (m_loop == nullptr) {
@@ -39,6 +40,7 @@ LTimer::~LTimer()
         close(m_timer_fd);
         m_timer_fd = -1;
     }
+    std::cout << __PRETTY_FUNCTION__ << std::endl;
 }
 
 void LTimer::start(uint64_t interval)
