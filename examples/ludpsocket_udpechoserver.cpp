@@ -2,9 +2,9 @@
 #include <cstring>
 #include <iostream>
 
-#include "../src/LEventLoop.hpp"
-#include "../src/LTimer.hpp"
-#include "../src/LUdpSocket.hpp"
+#include "LEventLoop.hpp"
+#include "LTimer.hpp"
+#include "LUdpSocket.hpp"
 
 using namespace std;
 

@@ -5,16 +5,18 @@ project(R-Lib LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(R-Lib main.cpp
-    src/LTimer.hpp
+add_library(RLib STATIC
     src/LTimer.cpp
-    src/LEventLoop.hpp
     src/LEventLoop.cpp
-    src/LGpioPin.hpp
     src/LGpioPin.cpp
-    src/LUdpSocket.hpp
-    src/LUdpSocket.cpp)
+    src/LUdpSocket.cpp
+)
 
+target_include_directories(RLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+
+add_executable(R-Lib-Test main.cpp)
+target_link_libraries(R-Lib-Test PRIVATE RLib)
 
 
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -24,15 +26,15 @@ if(CMAKE_BUILD_TYPE MATCHES "Debug")
     # -fsanitize=address : enables memory error detection
     # -g : generates debug symbols (to know exactly where the error occurred)
     # -fno-omit-frame-pointer : provides clear and readable call stacks
-    target_compile_options(R-Lib PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
+    target_compile_options(R-Lib-Test PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
+    target_link_options(R-Lib-Test PRIVATE -fsanitize=address)
 
-    # Linker flags (the linker also needs to be aware of the sanitizer)
-    target_link_options(R-Lib PRIVATE -fsanitize=address)
+    target_compile_options(RLib PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
 endif()
 
 
 include(GNUInstallDirs)
-install(TARGETS R-Lib
+install(TARGETS RLib
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

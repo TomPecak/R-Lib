@@ -37,8 +37,8 @@ The following example demonstrates how to set up the event loop and instantiate 
 
 ```cpp
 #include <iostream>
-#include "./src/LEventLoop.hpp"
-#include "./src/LTimer.hpp"
+#include "LEventLoop.hpp"
+#include "LTimer.hpp"
 
 class Application
 {

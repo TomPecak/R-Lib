@@ -2,8 +2,8 @@
 #include <cstring>
 #include <iostream>
 
-#include "../src/LEventLoop.hpp"
-#include "../src/LTimer.hpp"
+#include "LEventLoop.hpp"
+#include "LTimer.hpp"
 
 using namespace std;
 
