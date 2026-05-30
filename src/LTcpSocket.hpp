@@ -8,16 +8,23 @@
 
 #include "LEventLoop.hpp"
 
+/**
+ * @brief TCP socket wrapper analogous to Qt's QTcpSocket.
+ *
+ * LTcpSocket handles the lifecycle of a connected TCP stream.
+ * It maintains internal receive/transmit buffers so that I/O is
+ * fully decoupled from epoll notifications.
+ */
 class LTcpSocket : public LEpollHandler
 {
+    friend class LTcpServer;
+
 public:
     enum SocketState {
         UnconnectedState,
         HostLookupState,
         ConnectingState,
         ConnectedState,
-        BoundState,
-        ListeningState,
         ClosingState
     };
 
@@ -31,40 +38,31 @@ public:
         SocketResourceError
     };
 
-    enum BindFlag { DefaultForPlatform = 0x0, ShareAddress = 0x1, ReuseAddressHint = 0x2 };
-
     LTcpSocket();
     ~LTcpSocket() override;
-
-private:
-    explicit LTcpSocket(int socket_fd);
-
-public:
-    // --- Server ---
-
-    bool bind(uint16_t port, BindFlag mode = DefaultForPlatform);
-    bool bind(const std::string &address, uint16_t port, BindFlag mode = DefaultForPlatform);
-
-    bool listen(int backlog = 128);
-
-    // Returns a new LTcpSocket for the accepted connection. Caller takes ownership.
-    std::unique_ptr<LTcpSocket> accept();
-
-    // --- Client ---
 
     void connectToHost(const std::string &hostName, uint16_t port);
     void disconnectFromHost();
     void abort();
 
-    // --- I/O ---
-
+    /** Read up to @p maxSize bytes from the internal receive buffer. */
     int64_t read(char *data, int64_t maxSize);
+
+    /** Read all remaining bytes from the internal receive buffer. */
     std::vector<uint8_t> readAll();
 
+    /** Returns the number of bytes currently buffered for reading. */
+    int64_t bytesAvailable() const;
+
+    /**
+     * @brief Enqueue data for asynchronous transmission.
+     *
+     * If the transmit buffer is empty, a non-blocking send() is attempted
+     * immediately. Any unsent bytes are stored in the internal write buffer
+     * and flushed automatically when EPOLLOUT fires.
+     */
     int64_t write(const char *data, int64_t size);
     int64_t write(const std::vector<uint8_t> &data);
-
-    // --- State and Information ---
 
     SocketState state() const;
     SocketError error() const;
@@ -76,15 +74,13 @@ public:
     std::string peerAddress() const;
     uint16_t peerPort() const;
 
-    // --- Callbacks (Qt "Signals") ---
-
+    // Callbacks (Qt-style "signals")
     void onReadyRead(std::function<void()> callback);
     void onBytesWritten(std::function<void(int64_t bytes)> callback);
     void onConnected(std::function<void()> callback);
     void onDisconnected(std::function<void()> callback);
     void onErrorOccurred(std::function<void(SocketError)> callback);
     void onStateChanged(std::function<void(SocketState)> callback);
-    void onNewConnection(std::function<void()> callback);
 
     template<typename Object>
     void onReadyRead(Object *obj, void (Object::*method)())
@@ -122,30 +118,37 @@ public:
         m_stateCallback = [obj, method](SocketState state) { (obj->*method)(state); };
     }
 
-    template<typename Object>
-    void onNewConnection(Object *obj, void (Object::*method)())
-    {
-        m_newConnectionCallback = [obj, method]() { (obj->*method)(); };
-    }
-
 protected:
-    // Handles epoll events
     void handleEpollEvent(uint32_t events) override;
 
 private:
+    /** Adopt an already-accepted file descriptor (used by LTcpServer). */
+    explicit LTcpSocket(int socket_fd);
+
     void setError(SocketError error, const std::string &errorString);
     void setState(SocketState state);
 
-    int m_socket_fd;
+    /** Re-register the socket with the desired epoll interest mask. */
+    void updateEpollInterest(uint32_t events);
+
+    /** Attempt to drain the internal write buffer into the kernel. */
+    void flushWriteBuffer();
+
+    int m_socket_fd = -1;
+
     SocketState m_state;
     SocketError m_error;
     std::string m_errorString;
 
     std::string m_localAddress;
-    uint16_t m_localPort;
+    uint16_t m_localPort = 0;
 
     std::string m_peerAddress;
-    uint16_t m_peerPort;
+    uint16_t m_peerPort = 0;
+
+    // Internal buffers decouple kernel I/O from user consumption.
+    std::vector<uint8_t> m_readBuffer;
+    std::vector<uint8_t> m_writeBuffer;
 
     // Callbacks
     std::function<void()> m_readyReadCallback;
@@ -154,5 +157,4 @@ private:
     std::function<void()> m_disconnectedCallback;
     std::function<void(SocketError)> m_errorCallback;
     std::function<void(SocketState)> m_stateCallback;
-    std::function<void()> m_newConnectionCallback;
 };

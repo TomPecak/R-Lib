@@ -1,37 +1,30 @@
 #include "LTcpSocket.hpp"
 
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
 
 LTcpSocket::LTcpSocket()
-    : m_socket_fd(-1)
-    , m_state(UnconnectedState)
+    : m_state(UnconnectedState)
     , m_error(UnknownSocketError)
-    , m_localPort(0)
-    , m_peerPort(0)
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
-    // Create a TCP socket (IPv4).
-    // The SOCK_NONBLOCK and SOCK_CLOEXEC flags are crucial for performance
-    // in an epoll-based architecture.
-    m_socket_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 
+    m_socket_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK |
+                                                  SOCK_CLOEXEC, 0);
     if (m_socket_fd == -1) {
         setError(SocketResourceError, strerror(errno));
         return;
     }
 
-    // Immediately register the descriptor in the event loop (listen for read events)
     LEventLoop *loop = LEventLoop::current();
     if (loop) {
         loop->registerHandler(m_socket_fd, EPOLLIN, this);
@@ -44,10 +37,9 @@ LTcpSocket::LTcpSocket(int socket_fd)
     : m_socket_fd(socket_fd)
     , m_state(ConnectedState)
     , m_error(UnknownSocketError)
-    , m_localPort(0)
-    , m_peerPort(0)
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
+
     struct sockaddr_in peer_addr;
     socklen_t peer_len = sizeof(peer_addr);
     if (::getpeername(m_socket_fd, reinterpret_cast<struct sockaddr *>(&peer_addr), &peer_len) == 0) {
@@ -85,105 +77,19 @@ LTcpSocket::~LTcpSocket()
         m_socket_fd = -1;
     }
 
-    m_readyReadCallback = nullptr;
-    m_bytesWrittenCallback = nullptr;
-    m_connectedCallback = nullptr;
-    m_disconnectedCallback = nullptr;
-    m_errorCallback = nullptr;
-    m_stateCallback = nullptr;
-    m_newConnectionCallback = nullptr;
-
     std::cout << __PRETTY_FUNCTION__ << std::endl;
 }
 
-bool LTcpSocket::bind(uint16_t port, BindFlag mode)
-{
-    // 0.0.0.0 means listening on all available network interfaces
-    return bind("0.0.0.0", port, mode);
-}
-
-bool LTcpSocket::bind(const std::string &address, uint16_t port, BindFlag mode)
+void LTcpSocket::updateEpollInterest(uint32_t events)
 {
     if (m_socket_fd == -1)
-        return false;
+        return;
 
-    // Handle binding flags (ShareAddress / ReuseAddressHint -> SO_REUSEADDR)
-    if (mode == ShareAddress || mode == ReuseAddressHint) {
-        int opt = 1;
-        if (setsockopt(m_socket_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
-            setError(SocketAccessError,
-                     "Failed to set SO_REUSEADDR: " + std::string(strerror(errno)));
-        }
+    LEventLoop *loop = LEventLoop::current();
+    if (loop) {
+        loop->unregisterHandler(m_socket_fd);
+        loop->registerHandler(m_socket_fd, events, this);
     }
-
-    // Configure the IPv4 address structure
-    struct sockaddr_in addr;
-    std::memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, address.c_str(), &addr.sin_addr) <= 0) {
-        setError(NetworkError, "Invalid IP address format: " + address);
-        return false;
-    }
-
-    // The actual bind system call
-    if (::bind(m_socket_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) == -1) {
-        if (errno == EADDRINUSE) {
-            setError(AddressInUseError, strerror(errno));
-        } else {
-            setError(SocketAccessError, strerror(errno));
-        }
-        return false;
-    }
-
-    struct sockaddr_in local_addr;
-    socklen_t len = sizeof(local_addr);
-    if (::getsockname(m_socket_fd, reinterpret_cast<struct sockaddr *>(&local_addr), &len) == 0) {
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &local_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-        m_localAddress = std::string(ip_str);
-        m_localPort = ntohs(local_addr.sin_port);
-    }
-
-    setState(BoundState);
-    return true;
-}
-
-bool LTcpSocket::listen(int backlog)
-{
-    if (m_socket_fd == -1)
-        return false;
-
-    if (::listen(m_socket_fd, backlog) == -1) {
-        setError(SocketAccessError, strerror(errno));
-        return false;
-    }
-
-    setState(ListeningState);
-    return true;
-}
-
-std::unique_ptr<LTcpSocket> LTcpSocket::accept()
-{
-    if (m_socket_fd == -1 || m_state != ListeningState)
-        return nullptr;
-
-    struct sockaddr_in client_addr;
-    socklen_t client_len = sizeof(client_addr);
-    int client_fd = ::accept4(m_socket_fd,
-                              reinterpret_cast<struct sockaddr *>(&client_addr),
-                              &client_len,
-                              SOCK_NONBLOCK | SOCK_CLOEXEC);
-
-    if (client_fd == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            setError(NetworkError, strerror(errno));
-        }
-        return nullptr;
-    }
-
-    return std::unique_ptr<LTcpSocket>(new LTcpSocket(client_fd));
 }
 
 void LTcpSocket::connectToHost(const std::string &hostName, uint16_t port)
@@ -201,20 +107,13 @@ void LTcpSocket::connectToHost(const std::string &hostName, uint16_t port)
         return;
     }
 
-    // connect() on a non-blocking TCP socket returns immediately.
-    // We wait for the EPOLLOUT event to confirm the connection.
     int ret = ::connect(m_socket_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
     if (ret == -1) {
         if (errno == EINPROGRESS) {
             m_peerAddress = hostName;
             m_peerPort = port;
             setState(ConnectingState);
-
-            LEventLoop *loop = LEventLoop::current();
-            if (loop) {
-                loop->unregisterHandler(m_socket_fd);
-                loop->registerHandler(m_socket_fd, EPOLLIN | EPOLLOUT, this);
-            }
+            updateEpollInterest(EPOLLOUT);
             return;
         } else if (errno == ECONNREFUSED) {
             setError(ConnectionRefusedError, strerror(errno));
@@ -246,6 +145,9 @@ void LTcpSocket::disconnectFromHost()
     ::close(m_socket_fd);
     m_socket_fd = -1;
 
+    m_readBuffer.clear();
+    m_writeBuffer.clear();
+
     m_peerAddress.clear();
     m_peerPort = 0;
 
@@ -262,43 +164,39 @@ void LTcpSocket::abort()
 
 int64_t LTcpSocket::read(char *data, int64_t maxSize)
 {
-    if (m_socket_fd == -1 || m_state != ConnectedState)
-        return -1;
-
-    ssize_t ret = ::recv(m_socket_fd, data, maxSize, 0);
-
-    if (ret == 0) {
-        setError(RemoteHostClosedError, "Remote host closed the connection");
-        setState(ClosingState);
-        if (m_disconnectedCallback) {
-            m_disconnectedCallback();
-        }
+    if (maxSize <= 0 || m_readBuffer.empty())
         return 0;
-    } else if (ret == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            setError(NetworkError, strerror(errno));
-        }
-        return -1;
-    }
 
-    return ret;
+    int64_t bytesToRead = std::min<int64_t>(maxSize, static_cast<int64_t>(m_readBuffer.size()));
+    if (bytesToRead <= 0)
+        return 0;
+
+    std::copy(m_readBuffer.begin(), m_readBuffer.begin() + bytesToRead, data);
+    m_readBuffer.erase(m_readBuffer.begin(), m_readBuffer.begin() + bytesToRead);
+
+    if (!m_readBuffer.empty() && m_readyReadCallback) {
+        LEventLoop *loop = LEventLoop::current();
+        if (loop) {
+           loop->postTask([this]() {
+               if (!m_readBuffer.empty() && m_readyReadCallback) {
+                   m_readyReadCallback();
+               }
+           });
+        }
+    }
+    return bytesToRead;
 }
 
 std::vector<uint8_t> LTcpSocket::readAll()
 {
-    std::vector<uint8_t> buffer;
-    char temp[4096];
+    std::vector<uint8_t> data;
+    data.swap(m_readBuffer);
+    return data;
+}
 
-    while (true) {
-        int64_t bytes = read(temp, sizeof(temp));
-        if (bytes > 0) {
-            buffer.insert(buffer.end(), temp, temp + bytes);
-        } else {
-            break;
-        }
-    }
-
-    return buffer;
+int64_t LTcpSocket::bytesAvailable() const
+{
+    return static_cast<int64_t>(m_readBuffer.size());
 }
 
 int64_t LTcpSocket::write(const char *data, int64_t size)
@@ -306,23 +204,45 @@ int64_t LTcpSocket::write(const char *data, int64_t size)
     if (m_socket_fd == -1 || m_state != ConnectedState)
         return -1;
 
-    ssize_t ret = ::send(m_socket_fd, data, size, MSG_NOSIGNAL);
+    if (size <= 0)
+        return 0;
 
-    if (ret > 0 && m_bytesWrittenCallback) {
-        m_bytesWrittenCallback(ret);
-    } else if (ret == -1) {
-        if (errno == EPIPE || errno == ECONNRESET) {
-            setError(RemoteHostClosedError, strerror(errno));
-            setState(ClosingState);
-            if (m_disconnectedCallback) {
-                m_disconnectedCallback();
+    // if the transmit buffer is empty, attempt an immediate non-blocking send
+    if (m_writeBuffer.empty()) {
+        ssize_t ret = ::send(m_socket_fd, data, size, MSG_NOSIGNAL);
+        if (ret > 0) {
+            if (m_bytesWrittenCallback) {
+                m_bytesWrittenCallback(ret);
             }
-        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            setError(NetworkError, strerror(errno));
+
+            if (ret < size) {
+                // queue the remainder
+                m_writeBuffer.insert(m_writeBuffer.end(), data + ret, data + size);
+                updateEpollInterest(EPOLLIN | EPOLLOUT);
+            }
+            return size;
+        } else if (ret == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // kernel buffer full, fall through to buffered path
+            } else if (errno == EPIPE || errno == ECONNRESET) {
+                setError(RemoteHostClosedError, strerror(errno));
+                setState(ClosingState);
+                if (m_disconnectedCallback) {
+                    m_disconnectedCallback();
+                }
+                return -1;
+            } else {
+                setError(NetworkError, strerror(errno));
+                return -1;
+            }
         }
     }
 
-    return ret;
+    // buffer the data for asynchronous transmission
+    m_writeBuffer.insert(m_writeBuffer.end(), data, data + size);
+    updateEpollInterest(EPOLLIN | EPOLLOUT);
+
+    return size;
 }
 
 int64_t LTcpSocket::write(const std::vector<uint8_t> &data)
@@ -330,14 +250,52 @@ int64_t LTcpSocket::write(const std::vector<uint8_t> &data)
     return write(reinterpret_cast<const char *>(data.data()), data.size());
 }
 
+void LTcpSocket::flushWriteBuffer()
+{
+    if (m_socket_fd == -1 || m_writeBuffer.empty())
+        return;
+
+    while (!m_writeBuffer.empty()) {
+        ssize_t ret = ::send(m_socket_fd, m_writeBuffer.data(), m_writeBuffer.size(), MSG_NOSIGNAL);
+        if (ret > 0) {
+            if (m_bytesWrittenCallback) {
+                m_bytesWrittenCallback(ret);
+            }
+            m_writeBuffer.erase(m_writeBuffer.begin(), m_writeBuffer.begin() + ret);
+        } else if (ret == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // kernel buffer full; wait for the next EPOLLOUT event
+                break;
+            } else if (errno == EPIPE || errno == ECONNRESET) {
+                setError(RemoteHostClosedError, strerror(errno));
+                setState(ClosingState);
+                if (m_disconnectedCallback) {
+                    m_disconnectedCallback();
+                }
+                return;
+            } else {
+                setError(NetworkError, strerror(errno));
+                return;
+            }
+        }
+    }
+
+    if (m_writeBuffer.empty()) {
+        // remove EPOLLOUT to avoid busy-looping.
+        updateEpollInterest(EPOLLIN);
+    }
+}
+
 LTcpSocket::SocketState LTcpSocket::state() const
 {
     return m_state;
 }
+
 LTcpSocket::SocketError LTcpSocket::error() const
 {
     return m_error;
 }
+
 std::string LTcpSocket::errorString() const
 {
     return m_errorString;
@@ -347,6 +305,7 @@ std::string LTcpSocket::localAddress() const
 {
     return m_localAddress;
 }
+
 uint16_t LTcpSocket::localPort() const
 {
     return m_localPort;
@@ -356,6 +315,7 @@ std::string LTcpSocket::peerAddress() const
 {
     return m_peerAddress;
 }
+
 uint16_t LTcpSocket::peerPort() const
 {
     return m_peerPort;
@@ -365,29 +325,30 @@ void LTcpSocket::onReadyRead(std::function<void()> callback)
 {
     m_readyReadCallback = callback;
 }
+
 void LTcpSocket::onBytesWritten(std::function<void(int64_t)> callback)
 {
     m_bytesWrittenCallback = callback;
 }
+
 void LTcpSocket::onConnected(std::function<void()> callback)
 {
     m_connectedCallback = callback;
 }
+
 void LTcpSocket::onDisconnected(std::function<void()> callback)
 {
     m_disconnectedCallback = callback;
 }
+
 void LTcpSocket::onErrorOccurred(std::function<void(SocketError)> callback)
 {
     m_errorCallback = callback;
 }
+
 void LTcpSocket::onStateChanged(std::function<void(SocketState)> callback)
 {
     m_stateCallback = callback;
-}
-void LTcpSocket::onNewConnection(std::function<void()> callback)
-{
-    m_newConnectionCallback = callback;
 }
 
 void LTcpSocket::handleEpollEvent(uint32_t events)
@@ -405,6 +366,20 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
         if (m_state == ConnectingState) {
             setState(UnconnectedState);
         }
+
+        if (m_socket_fd != -1) {
+            LEventLoop *loop = LEventLoop::current();
+
+            if (loop) {
+                loop->unregisterHandler(m_socket_fd);
+            }
+            ::close(m_socket_fd);
+            m_socket_fd = -1;
+        }
+
+        if (m_disconnectedCallback) {
+            m_disconnectedCallback();
+        }
         return;
     }
 
@@ -414,21 +389,41 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
             if (m_connectedCallback) {
                 m_connectedCallback();
             }
-            LEventLoop *loop = LEventLoop::current();
-            if (loop) {
-                loop->unregisterHandler(m_socket_fd);
-                loop->registerHandler(m_socket_fd, EPOLLIN, this);
+            if(m_writeBuffer.empty()) {
+                updateEpollInterest(EPOLLIN);
+            } else {
+                updateEpollInterest(EPOLLIN | EPOLLOUT);
             }
+        } else if (m_state == ConnectedState) {
+            flushWriteBuffer();
         }
     }
 
     if (events & EPOLLIN) {
-        if (m_state == ListeningState) {
-            if (m_newConnectionCallback) {
-                m_newConnectionCallback();
+        if (m_state == ConnectedState ||
+            m_state == ClosingState) {
+            char temp[4096];
+            while (true) {
+                ssize_t ret = ::recv(m_socket_fd, temp, sizeof(temp), 0);
+                if (ret > 0) {
+                    m_readBuffer.insert(m_readBuffer.end(), temp, temp + ret);
+                } else if (ret == 0) {
+                    // peer performed an orderly shutdown
+                    setError(RemoteHostClosedError, "Remote host closed the connection");
+                    setState(ClosingState);
+                    if (m_disconnectedCallback) {
+                        m_disconnectedCallback();
+                    }
+                    break;
+                } else {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
+                    setError(NetworkError, strerror(errno));
+                    break;
+                }
             }
-        } else if (m_state == ConnectedState || m_state == ClosingState) {
-            if (m_readyReadCallback) {
+
+            if (!m_readBuffer.empty() && m_readyReadCallback) {
                 m_readyReadCallback();
             }
         }
