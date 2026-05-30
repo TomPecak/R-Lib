@@ -33,6 +33,7 @@ A timer implementation based on `timerfd_create` and `timerfd_settime`. It integ
 
 ## Quick Start Example
 
+### 1. Basic Timer Example
 The following example demonstrates how to set up the event loop and instantiate multiple concurrent timers.
 
 ```cpp
@@ -67,6 +68,51 @@ int main()
 
     Application app;
 
+    return loop.exec();
+}
+```
+
+### 2. UDP Sender Example
+This example demonstrates how to combine LTimer and LUdpSocket to create an asynchronous UDP sender that transmits a message every second to localhost on port 5555.
+
+```cpp
+#include <cerrno>
+#include <cstring>
+#include <iostream>
+
+#include <LEventLoop.hpp>
+#include <LTimer.hpp>
+#include <LUdpSocket.hpp>
+
+using namespace std;
+
+class UdpSender
+{
+public:
+    UdpSender()
+        : counter(0)
+    {
+        timer.onTimeout(this, &UdpSender::sendData);
+        timer.start(1000); // 1000 ms = 1 second
+    }
+
+    void sendData()
+    {
+        counter++;
+        std::string message = "Message no. " + std::to_string(counter) + " from R-Lib!\n";
+        socket.writeDatagram(message.c_str(), message.length(), "127.0.0.1", 5555);
+    }
+
+private:
+    LUdpSocket socket;
+    LTimer timer;
+    int counter;
+};
+
+int main()
+{
+    LEventLoop loop;
+    UdpSender sender;
     return loop.exec();
 }
 ```
