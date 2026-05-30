@@ -15,8 +15,8 @@ add_library(RLib STATIC
 target_include_directories(RLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 
-add_executable(R-Lib-Test main.cpp)
-target_link_libraries(R-Lib-Test PRIVATE RLib)
+add_executable(R-Lib-sample-app main.cpp)
+target_link_libraries(R-Lib-sample-app PRIVATE RLib)
 
 
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -26,8 +26,8 @@ if(CMAKE_BUILD_TYPE MATCHES "Debug")
     # -fsanitize=address : enables memory error detection
     # -g : generates debug symbols (to know exactly where the error occurred)
     # -fno-omit-frame-pointer : provides clear and readable call stacks
-    target_compile_options(R-Lib-Test PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
-    target_link_options(R-Lib-Test PRIVATE -fsanitize=address)
+    target_compile_options(R-Lib-sample-app PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
+    target_link_options(R-Lib-sample-app PRIVATE -fsanitize=address)
 
     target_compile_options(RLib PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
 endif()
@@ -40,3 +40,5 @@ install(TARGETS RLib
 )
 
 add_subdirectory(examples/)
+
+add_subdirectory(tests/)
