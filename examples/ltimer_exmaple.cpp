@@ -1,16 +1,9 @@
-//Linux
-#include <sys/epoll.h>
-#include <sys/timerfd.h>
-#include <unistd.h>
-
-//C++
 #include <cerrno>
 #include <cstring>
 #include <iostream>
 
-#include "../../src/LEventLoop.hpp"
-#include "../../src/LGpioPin.hpp"
-#include "../../src/LTimer.hpp"
+#include "../src/LEventLoop.hpp"
+#include "../src/LTimer.hpp"
 
 using namespace std;
 
@@ -19,20 +12,23 @@ class Application
 public:
     Application()
     {
-        timer.onTimeout([]() { std::cout << "Application timer 3 event!" << std::endl; });
-        timer.start(200);
+        timer_3.onTimeout([]() { std::cout << "Application timer 3 event!" << std::endl; });
+        timer_3.start(200);
+
+        timer_4.onTimeout(this, &Application::handleTimer_4);
+        timer_4.start(250);
     }
 
+    void handleTimer_4() { std::cout << "Application timer 4 event!" << std::endl; }
+
 private:
-    LTimer timer;
+    LTimer timer_3;
+    LTimer timer_4;
 };
 
 int main()
 {
     LEventLoop loop;
-
-    LGpioPin ledPin("/dev/gpiochip0", 17);
-    ledPin.setDirection(LGpioPin::Output);
 
     LTimer timer_1;
     timer_1.onTimeout([]() { std::cout << "Timer_1 event callback!" << std::endl; });
