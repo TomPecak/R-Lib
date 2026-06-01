@@ -20,7 +20,7 @@ LEventLoop::LEventLoop()
         std::cerr << "LEventLoop epoll_create1 error: " << strerror(errno) << std::endl;
     }
 
-    m_event_fd = eventfd(0, EFD_NONBLOCK);
+m_event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (m_event_fd != -1) {
         struct epoll_event event;
         event.events = EPOLLIN;
