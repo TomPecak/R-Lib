@@ -1,11 +1,7 @@
 #include "LTcpSocket.hpp"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -15,52 +11,37 @@
 LTcpSocket::LTcpSocket()
     : m_state(UnconnectedState)
     , m_error(UnknownSocketError)
+    , m_epollInterest(EPOLLIN)
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
 
-    m_socket_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK |
-                                                  SOCK_CLOEXEC, 0);
-    if (m_socket_fd == -1) {
-        setError(SocketResourceError, strerror(errno));
+    if (!m_nativeSocket.open()) {
+        setErrorFromNative(SocketResourceError);
         return;
     }
 
     LEventLoop *loop = LEventLoop::current();
     if (loop) {
-        loop->registerHandler(m_socket_fd, EPOLLIN, this);
+        m_registeredToEpoll = loop->registerHandler(m_nativeSocket.fd(), EPOLLIN, this);
     } else {
         std::cerr << "LTcpSocket Warning: No LEventLoop in current thread!" << std::endl;
     }
 }
 
 LTcpSocket::LTcpSocket(int socket_fd)
-    : m_socket_fd(socket_fd)
-    , m_state(ConnectedState)
+    : m_state(ConnectedState)
     , m_error(UnknownSocketError)
+    , m_epollInterest(EPOLLIN)
+    , m_nativeSocket(socket_fd)
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
 
-    struct sockaddr_in peer_addr;
-    socklen_t peer_len = sizeof(peer_addr);
-    if (::getpeername(m_socket_fd, reinterpret_cast<struct sockaddr *>(&peer_addr), &peer_len) == 0) {
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &peer_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-        m_peerAddress = std::string(ip_str);
-        m_peerPort = ntohs(peer_addr.sin_port);
-    }
-
-    struct sockaddr_in local_addr;
-    socklen_t local_len = sizeof(local_addr);
-    if (::getsockname(m_socket_fd, reinterpret_cast<struct sockaddr *>(&local_addr), &local_len) == 0) {
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &local_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-        m_localAddress = std::string(ip_str);
-        m_localPort = ntohs(local_addr.sin_port);
-    }
+    m_nativeSocket.loadPeerEndpoint(&m_peerAddress, &m_peerPort);
+    m_nativeSocket.loadLocalEndpoint(&m_localAddress, &m_localPort);
 
     LEventLoop *loop = LEventLoop::current();
     if (loop) {
-        loop->registerHandler(m_socket_fd, EPOLLIN, this);
+        m_registeredToEpoll = loop->registerHandler(m_nativeSocket.fd(), EPOLLIN, this);
     } else {
         std::cerr << "LTcpSocket Warning: No LEventLoop in current thread!" << std::endl;
     }
@@ -68,63 +49,63 @@ LTcpSocket::LTcpSocket(int socket_fd)
 
 LTcpSocket::~LTcpSocket()
 {
-    if (m_socket_fd != -1) {
+    if (m_nativeSocket.isOpen()) {
         LEventLoop *loop = LEventLoop::current();
-        if (loop) {
-            loop->unregisterHandler(m_socket_fd);
+        if (loop && m_registeredToEpoll) {
+            loop->unregisterHandler(m_nativeSocket.fd());
+            m_registeredToEpoll = false;
         }
-        ::close(m_socket_fd);
-        m_socket_fd = -1;
     }
-
+    m_nativeSocket.closeFd();
     std::cout << __PRETTY_FUNCTION__ << std::endl;
 }
 
 void LTcpSocket::updateEpollInterest(uint32_t events)
 {
-    if (m_socket_fd == -1)
+    if (!m_nativeSocket.isOpen()) {
         return;
+    }
 
     LEventLoop *loop = LEventLoop::current();
-    if (loop) {
-        loop->unregisterHandler(m_socket_fd);
-        loop->registerHandler(m_socket_fd, events, this);
+    if (!loop) {
+        return;
+    }
+
+    if (!m_registeredToEpoll) {
+        m_registeredToEpoll = loop->registerHandler(m_nativeSocket.fd(), events, this);
+    } else {
+        m_registeredToEpoll = loop->modifyHandler(m_nativeSocket.fd(), events, this);
+    }
+    if (m_registeredToEpoll) {
+        m_epollInterest = events;
     }
 }
 
 void LTcpSocket::connectToHost(const std::string &hostName, uint16_t port)
 {
-    if (m_socket_fd == -1)
-        return;
-
-    struct sockaddr_in addr;
-    std::memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, hostName.c_str(), &addr.sin_addr) <= 0) {
-        setError(NetworkError, "Invalid IP address: " + hostName);
+    if (!m_nativeSocket.isOpen()) {
         return;
     }
 
-    int ret = ::connect(m_socket_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
-    if (ret == -1) {
-        if (errno == EINPROGRESS) {
+    if (!m_nativeSocket.connectIPv4(hostName, port)) {
+        if (m_nativeSocket.lastErrno() == EINPROGRESS) {
             m_peerAddress = hostName;
             m_peerPort = port;
             setState(ConnectingState);
             updateEpollInterest(EPOLLOUT);
             return;
-        } else if (errno == ECONNREFUSED) {
-            setError(ConnectionRefusedError, strerror(errno));
+        }
+        if (m_nativeSocket.lastErrno() == ECONNREFUSED) {
+            setErrorFromNative(ConnectionRefusedError);
         } else {
-            setError(NetworkError, strerror(errno));
+            setErrorFromNative(NetworkError);
         }
         return;
     }
 
     m_peerAddress = hostName;
     m_peerPort = port;
+    m_nativeSocket.loadLocalEndpoint(&m_localAddress, &m_localPort);
     setState(ConnectedState);
     if (m_connectedCallback) {
         m_connectedCallback();
@@ -133,21 +114,23 @@ void LTcpSocket::connectToHost(const std::string &hostName, uint16_t port)
 
 void LTcpSocket::disconnectFromHost()
 {
-    if (m_socket_fd == -1)
+    if (!m_nativeSocket.isOpen()) {
         return;
-
-    LEventLoop *loop = LEventLoop::current();
-    if (loop) {
-        loop->unregisterHandler(m_socket_fd);
     }
 
-    ::shutdown(m_socket_fd, SHUT_RDWR);
-    ::close(m_socket_fd);
-    m_socket_fd = -1;
+    LEventLoop *loop = LEventLoop::current();
+    if (loop && m_registeredToEpoll) {
+        loop->unregisterHandler(m_nativeSocket.fd());
+        m_registeredToEpoll = false;
+    }
+
+    m_nativeSocket.shutdownReadWrite();
+    m_nativeSocket.closeFd();
 
     m_readBuffer.clear();
     m_writeBuffer.clear();
-
+    m_readStart = 0;
+    m_writeStart = 0;
     m_peerAddress.clear();
     m_peerPort = 0;
 
@@ -164,24 +147,24 @@ void LTcpSocket::abort()
 
 int64_t LTcpSocket::read(char *data, int64_t maxSize)
 {
-    if (maxSize <= 0 || m_readBuffer.empty())
+    size_t available = m_readBuffer.size() - m_readStart;
+    if (maxSize <= 0 || available == 0) {
         return 0;
+    }
 
-    int64_t bytesToRead = std::min<int64_t>(maxSize, static_cast<int64_t>(m_readBuffer.size()));
-    if (bytesToRead <= 0)
-        return 0;
+    int64_t bytesToRead = std::min<int64_t>(maxSize, static_cast<int64_t>(available));
+    std::memcpy(data, m_readBuffer.data() + m_readStart, static_cast<size_t>(bytesToRead));
+    m_readStart += static_cast<size_t>(bytesToRead);
+    compactReadBufferIfNeeded();
 
-    std::copy(m_readBuffer.begin(), m_readBuffer.begin() + bytesToRead, data);
-    m_readBuffer.erase(m_readBuffer.begin(), m_readBuffer.begin() + bytesToRead);
-
-    if (!m_readBuffer.empty() && m_readyReadCallback) {
+    if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
         LEventLoop *loop = LEventLoop::current();
         if (loop) {
-           loop->postTask([this]() {
-               if (!m_readBuffer.empty() && m_readyReadCallback) {
-                   m_readyReadCallback();
-               }
-           });
+            loop->postTask([this]() {
+                if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
+                    m_readyReadCallback();
+                }
+            });
         }
     }
     return bytesToRead;
@@ -189,99 +172,103 @@ int64_t LTcpSocket::read(char *data, int64_t maxSize)
 
 std::vector<uint8_t> LTcpSocket::readAll()
 {
-    std::vector<uint8_t> data;
-    data.swap(m_readBuffer);
-    return data;
+    std::vector<uint8_t> out;
+    size_t available = m_readBuffer.size() - m_readStart;
+    out.reserve(available);
+    out.insert(out.end(), m_readBuffer.begin() + static_cast<std::ptrdiff_t>(m_readStart), m_readBuffer.end());
+    m_readBuffer.clear();
+    m_readStart = 0;
+    return out;
 }
 
 int64_t LTcpSocket::bytesAvailable() const
 {
-    return static_cast<int64_t>(m_readBuffer.size());
+    return static_cast<int64_t>(m_readBuffer.size() - m_readStart);
 }
 
 int64_t LTcpSocket::write(const char *data, int64_t size)
 {
-    if (m_socket_fd == -1 || m_state != ConnectedState)
+    if (!m_nativeSocket.isOpen() || m_state != ConnectedState) {
         return -1;
-
-    if (size <= 0)
+    }
+    if (size <= 0) {
         return 0;
+    }
 
-    // if the transmit buffer is empty, attempt an immediate non-blocking send
-    if (m_writeBuffer.empty()) {
-        ssize_t ret = ::send(m_socket_fd, data, size, MSG_NOSIGNAL);
+    if ((m_writeBuffer.size() - m_writeStart) == 0) {
+        ssize_t ret = m_nativeSocket.sendSome(data, static_cast<size_t>(size), MSG_NOSIGNAL);
         if (ret > 0) {
             if (m_bytesWrittenCallback) {
                 m_bytesWrittenCallback(ret);
             }
-
             if (ret < size) {
-                // queue the remainder
                 m_writeBuffer.insert(m_writeBuffer.end(), data + ret, data + size);
                 updateEpollInterest(EPOLLIN | EPOLLOUT);
             }
             return size;
-        } else if (ret == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // kernel buffer full, fall through to buffered path
-            } else if (errno == EPIPE || errno == ECONNRESET) {
-                setError(RemoteHostClosedError, strerror(errno));
-                setState(ClosingState);
-                if (m_disconnectedCallback) {
-                    m_disconnectedCallback();
+        }
+        if (ret == -1) {
+            if (m_nativeSocket.lastErrno() != EAGAIN && m_nativeSocket.lastErrno() != EWOULDBLOCK) {
+                if (m_nativeSocket.lastErrno() == EPIPE || m_nativeSocket.lastErrno() == ECONNRESET) {
+                    setErrorFromNative(RemoteHostClosedError);
+                    setState(ClosingState);
+                    if (m_disconnectedCallback) {
+                        m_disconnectedCallback();
+                    }
+                } else {
+                    setErrorFromNative(NetworkError);
                 }
-                return -1;
-            } else {
-                setError(NetworkError, strerror(errno));
                 return -1;
             }
         }
     }
 
-    // buffer the data for asynchronous transmission
     m_writeBuffer.insert(m_writeBuffer.end(), data, data + size);
     updateEpollInterest(EPOLLIN | EPOLLOUT);
-
     return size;
 }
 
 int64_t LTcpSocket::write(const std::vector<uint8_t> &data)
 {
-    return write(reinterpret_cast<const char *>(data.data()), data.size());
+    return write(reinterpret_cast<const char *>(data.data()), static_cast<int64_t>(data.size()));
 }
 
 void LTcpSocket::flushWriteBuffer()
 {
-    if (m_socket_fd == -1 || m_writeBuffer.empty())
+    if (!m_nativeSocket.isOpen() || (m_writeBuffer.size() - m_writeStart) == 0) {
         return;
+    }
 
-    while (!m_writeBuffer.empty()) {
-        ssize_t ret = ::send(m_socket_fd, m_writeBuffer.data(), m_writeBuffer.size(), MSG_NOSIGNAL);
+    while ((m_writeBuffer.size() - m_writeStart) > 0) {
+        size_t remaining = m_writeBuffer.size() - m_writeStart;
+        ssize_t ret = m_nativeSocket.sendSome(m_writeBuffer.data() + m_writeStart, remaining, MSG_NOSIGNAL);
         if (ret > 0) {
             if (m_bytesWrittenCallback) {
                 m_bytesWrittenCallback(ret);
             }
-            m_writeBuffer.erase(m_writeBuffer.begin(), m_writeBuffer.begin() + ret);
-        } else if (ret == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // kernel buffer full; wait for the next EPOLLOUT event
-                break;
-            } else if (errno == EPIPE || errno == ECONNRESET) {
-                setError(RemoteHostClosedError, strerror(errno));
-                setState(ClosingState);
-                if (m_disconnectedCallback) {
-                    m_disconnectedCallback();
-                }
-                return;
-            } else {
-                setError(NetworkError, strerror(errno));
-                return;
-            }
+            m_writeStart += static_cast<size_t>(ret);
+            compactWriteBufferIfNeeded();
+            continue;
         }
+
+        if (ret == -1 && (m_nativeSocket.lastErrno() == EAGAIN || m_nativeSocket.lastErrno() == EWOULDBLOCK)) {
+            break;
+        }
+
+        if (m_nativeSocket.lastErrno() == EPIPE || m_nativeSocket.lastErrno() == ECONNRESET) {
+            setErrorFromNative(RemoteHostClosedError);
+            setState(ClosingState);
+            if (m_disconnectedCallback) {
+                m_disconnectedCallback();
+            }
+            return;
+        }
+
+        setErrorFromNative(NetworkError);
+        return;
     }
 
-    if (m_writeBuffer.empty()) {
-        // remove EPOLLOUT to avoid busy-looping.
+    if ((m_writeBuffer.size() - m_writeStart) == 0) {
         updateEpollInterest(EPOLLIN);
     }
 }
@@ -354,27 +341,27 @@ void LTcpSocket::onStateChanged(std::function<void(SocketState)> callback)
 void LTcpSocket::handleEpollEvent(uint32_t events)
 {
     if (events & EPOLLERR) {
-        int error_code = 0;
-        socklen_t len = sizeof(error_code);
-        if (::getsockopt(m_socket_fd, SOL_SOCKET, SO_ERROR, &error_code, &len) == 0 && error_code != 0) {
-            if (error_code == ECONNREFUSED) {
-                setError(ConnectionRefusedError, strerror(error_code));
+        int errorCode = 0;
+        socklen_t len = sizeof(errorCode);
+        if (::getsockopt(m_nativeSocket.fd(), SOL_SOCKET, SO_ERROR, &errorCode, &len) == 0 && errorCode != 0) {
+            if (errorCode == ECONNREFUSED) {
+                setError(ConnectionRefusedError, std::strerror(errorCode));
             } else {
-                setError(NetworkError, strerror(error_code));
+                setError(NetworkError, std::strerror(errorCode));
             }
         }
+
         if (m_state == ConnectingState) {
             setState(UnconnectedState);
         }
 
-        if (m_socket_fd != -1) {
+        if (m_nativeSocket.isOpen()) {
             LEventLoop *loop = LEventLoop::current();
-
-            if (loop) {
-                loop->unregisterHandler(m_socket_fd);
+            if (loop && m_registeredToEpoll) {
+                loop->unregisterHandler(m_nativeSocket.fd());
+                m_registeredToEpoll = false;
             }
-            ::close(m_socket_fd);
-            m_socket_fd = -1;
+            m_nativeSocket.closeFd();
         }
 
         if (m_disconnectedCallback) {
@@ -386,10 +373,11 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
     if (events & EPOLLOUT) {
         if (m_state == ConnectingState) {
             setState(ConnectedState);
+            m_nativeSocket.loadLocalEndpoint(&m_localAddress, &m_localPort);
             if (m_connectedCallback) {
                 m_connectedCallback();
             }
-            if(m_writeBuffer.empty()) {
+            if ((m_writeBuffer.size() - m_writeStart) == 0) {
                 updateEpollInterest(EPOLLIN);
             } else {
                 updateEpollInterest(EPOLLIN | EPOLLOUT);
@@ -400,30 +388,32 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
     }
 
     if (events & EPOLLIN) {
-        if (m_state == ConnectedState ||
-            m_state == ClosingState) {
-            char temp[4096];
+        if (m_state == ConnectedState || m_state == ClosingState) {
+            uint8_t chunk[65536];
             while (true) {
-                ssize_t ret = ::recv(m_socket_fd, temp, sizeof(temp), 0);
+                ssize_t ret = m_nativeSocket.recvSome(chunk, sizeof(chunk), 0);
                 if (ret > 0) {
-                    m_readBuffer.insert(m_readBuffer.end(), temp, temp + ret);
-                } else if (ret == 0) {
-                    // peer performed an orderly shutdown
+                    m_readBuffer.insert(m_readBuffer.end(), chunk, chunk + ret);
+                    continue;
+                }
+
+                if (ret == 0) {
                     setError(RemoteHostClosedError, "Remote host closed the connection");
                     setState(ClosingState);
                     if (m_disconnectedCallback) {
                         m_disconnectedCallback();
                     }
                     break;
-                } else {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK)
-                        break;
-                    setError(NetworkError, strerror(errno));
+                }
+
+                if (m_nativeSocket.lastErrno() == EAGAIN || m_nativeSocket.lastErrno() == EWOULDBLOCK) {
                     break;
                 }
+                setErrorFromNative(NetworkError);
+                break;
             }
 
-            if (!m_readBuffer.empty() && m_readyReadCallback) {
+            if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
                 m_readyReadCallback();
             }
         }
@@ -447,6 +437,11 @@ void LTcpSocket::setError(SocketError error, const std::string &errorString)
     }
 }
 
+void LTcpSocket::setErrorFromNative(SocketError error)
+{
+    setError(error, m_nativeSocket.lastErrorString());
+}
+
 void LTcpSocket::setState(SocketState state)
 {
     if (m_state != state) {
@@ -455,4 +450,30 @@ void LTcpSocket::setState(SocketState state)
             m_stateCallback(m_state);
         }
     }
+}
+
+void LTcpSocket::compactReadBufferIfNeeded()
+{
+    if (m_readStart == 0) {
+        return;
+    }
+    if (m_readStart < 65536 && m_readStart * 2 < m_readBuffer.size()) {
+        return;
+    }
+
+    m_readBuffer.erase(m_readBuffer.begin(), m_readBuffer.begin() + static_cast<std::ptrdiff_t>(m_readStart));
+    m_readStart = 0;
+}
+
+void LTcpSocket::compactWriteBufferIfNeeded()
+{
+    if (m_writeStart == 0) {
+        return;
+    }
+    if (m_writeStart < 65536 && m_writeStart * 2 < m_writeBuffer.size()) {
+        return;
+    }
+
+    m_writeBuffer.erase(m_writeBuffer.begin(), m_writeBuffer.begin() + static_cast<std::ptrdiff_t>(m_writeStart));
+    m_writeStart = 0;
 }

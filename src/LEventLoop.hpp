@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <functional>
-#include <mutex>
-#include <vector>
+
+#include "LTaskQueue.hpp"
 
 class LEpollHandler
 {
@@ -18,6 +18,7 @@ public:
     ~LEventLoop();
 
     bool registerHandler(int fd, uint32_t events, LEpollHandler *handler);
+    bool modifyHandler(int fd, uint32_t events, LEpollHandler *handler);
     void unregisterHandler(int fd);
 
     int exec();
@@ -34,6 +35,5 @@ private:
     int m_epoll_fd;
     bool m_running;
     int m_event_fd = -1;
-    std::vector<std::function<void()>> m_pendingTasks;
-    std::mutex m_taskMutex;
+    LTaskQueue m_taskQueue;
 };

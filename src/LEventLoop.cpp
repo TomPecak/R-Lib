@@ -54,6 +54,19 @@ bool LEventLoop::registerHandler(int fd, uint32_t events, LEpollHandler *handler
     return true;
 }
 
+bool LEventLoop::modifyHandler(int fd, uint32_t events, LEpollHandler *handler)
+{
+    struct epoll_event event;
+    event.events = events;
+    event.data.ptr = handler;
+
+    if (epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, fd, &event) == -1) {
+        std::cerr << "LEventLoop epoll_ctl MOD error: " << strerror(errno) << std::endl;
+        return false;
+    }
+    return true;
+}
+
 void LEventLoop::unregisterHandler(int fd)
 {
     epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
@@ -106,10 +119,7 @@ LEventLoop *LEventLoop::current()
 
 void LEventLoop::postTask(std::function<void()> task)
 {
-    {
-        std::lock_guard<std::mutex> lock(m_taskMutex);
-        m_pendingTasks.push_back(std::move(task));
-    }
+    m_taskQueue.push(std::move(task));
     if (m_event_fd != -1) {
         uint64_t val = 1;
         (void)::write(m_event_fd, &val, sizeof(val));
@@ -118,11 +128,7 @@ void LEventLoop::postTask(std::function<void()> task)
 
 void LEventLoop::flushTasks()
 {
-    std::vector<std::function<void()>> tasks;
-    {
-        std::lock_guard<std::mutex> lock(m_taskMutex);
-        tasks.swap(m_pendingTasks);
-    }
+    std::vector<std::function<void()>> tasks = m_taskQueue.takeAll();
     for (auto &task : tasks) {
         if (task) {
             task();

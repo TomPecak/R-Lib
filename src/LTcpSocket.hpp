@@ -1,12 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "LEventLoop.hpp"
+#include "LNativeTcpSocket.hpp"
 
 /**
  * @brief TCP socket wrapper analogous to Qt's QTcpSocket.
@@ -126,7 +127,10 @@ private:
     explicit LTcpSocket(int socket_fd);
 
     void setError(SocketError error, const std::string &errorString);
+    void setErrorFromNative(SocketError error);
     void setState(SocketState state);
+    void compactReadBufferIfNeeded();
+    void compactWriteBufferIfNeeded();
 
     /** Re-register the socket with the desired epoll interest mask. */
     void updateEpollInterest(uint32_t events);
@@ -134,7 +138,9 @@ private:
     /** Attempt to drain the internal write buffer into the kernel. */
     void flushWriteBuffer();
 
-    int m_socket_fd = -1;
+    bool m_registeredToEpoll = false;
+    uint32_t m_epollInterest = 0;
+    LNativeTcpSocket m_nativeSocket;
 
     SocketState m_state;
     SocketError m_error;
@@ -148,7 +154,10 @@ private:
 
     // Internal buffers decouple kernel I/O from user consumption.
     std::vector<uint8_t> m_readBuffer;
+    size_t m_readStart = 0;
+    // TODO: If STL vector-offset buffering is not sufficient, implement a custom fixed ring buffer.
     std::vector<uint8_t> m_writeBuffer;
+    size_t m_writeStart = 0;
 
     // Callbacks
     std::function<void()> m_readyReadCallback;
