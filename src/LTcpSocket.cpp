@@ -129,7 +129,6 @@ void LTcpSocket::disconnectFromHost()
 
     m_readBuffer.clear();
     m_writeBuffer.clear();
-    m_readStart = 0;
     m_writeStart = 0;
     m_peerAddress.clear();
     m_peerPort = 0;
@@ -147,43 +146,35 @@ void LTcpSocket::abort()
 
 int64_t LTcpSocket::read(char *data, int64_t maxSize)
 {
-    size_t available = m_readBuffer.size() - m_readStart;
+    size_t available = m_readBuffer.size();
     if (maxSize <= 0 || available == 0) {
         return 0;
     }
 
-    int64_t bytesToRead = std::min<int64_t>(maxSize, static_cast<int64_t>(available));
-    std::memcpy(data, m_readBuffer.data() + m_readStart, static_cast<size_t>(bytesToRead));
-    m_readStart += static_cast<size_t>(bytesToRead);
-    compactReadBufferIfNeeded();
+    size_t bytesToRead = std::min<size_t>(static_cast<size_t>(maxSize), available);
+    m_readBuffer.read(reinterpret_cast<uint8_t *>(data), bytesToRead);
 
-    if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
+    if (!m_readBuffer.empty() && m_readyReadCallback) {
         LEventLoop *loop = LEventLoop::current();
         if (loop) {
             loop->postTask([this]() {
-                if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
+                if (!m_readBuffer.empty() && m_readyReadCallback) {
                     m_readyReadCallback();
                 }
             });
         }
     }
-    return bytesToRead;
+    return static_cast<int64_t>(bytesToRead);
 }
 
 std::vector<uint8_t> LTcpSocket::readAll()
 {
-    std::vector<uint8_t> out;
-    size_t available = m_readBuffer.size() - m_readStart;
-    out.reserve(available);
-    out.insert(out.end(), m_readBuffer.begin() + static_cast<std::ptrdiff_t>(m_readStart), m_readBuffer.end());
-    m_readBuffer.clear();
-    m_readStart = 0;
-    return out;
+    return m_readBuffer.readAll();
 }
 
 int64_t LTcpSocket::bytesAvailable() const
 {
-    return static_cast<int64_t>(m_readBuffer.size() - m_readStart);
+    return static_cast<int64_t>(m_readBuffer.size());
 }
 
 int64_t LTcpSocket::write(const char *data, int64_t size)
@@ -393,7 +384,7 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
             while (true) {
                 ssize_t ret = m_nativeSocket.recvSome(chunk, sizeof(chunk), 0);
                 if (ret > 0) {
-                    m_readBuffer.insert(m_readBuffer.end(), chunk, chunk + ret);
+                    m_readBuffer.append(chunk, static_cast<size_t>(ret));
                     continue;
                 }
 
@@ -413,7 +404,7 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
                 break;
             }
 
-            if ((m_readBuffer.size() - m_readStart) > 0 && m_readyReadCallback) {
+            if (!m_readBuffer.empty() && m_readyReadCallback) {
                 m_readyReadCallback();
             }
         }
@@ -450,19 +441,6 @@ void LTcpSocket::setState(SocketState state)
             m_stateCallback(m_state);
         }
     }
-}
-
-void LTcpSocket::compactReadBufferIfNeeded()
-{
-    if (m_readStart == 0) {
-        return;
-    }
-    if (m_readStart < 65536 && m_readStart * 2 < m_readBuffer.size()) {
-        return;
-    }
-
-    m_readBuffer.erase(m_readBuffer.begin(), m_readBuffer.begin() + static_cast<std::ptrdiff_t>(m_readStart));
-    m_readStart = 0;
 }
 
 void LTcpSocket::compactWriteBufferIfNeeded()

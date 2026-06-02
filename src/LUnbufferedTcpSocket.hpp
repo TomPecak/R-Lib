@@ -1,26 +1,15 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
-#include "LByteRingBuffer.hpp"
 #include "LEventLoop.hpp"
 #include "LNativeTcpSocket.hpp"
 
-/**
- * @brief TCP socket wrapper analogous to Qt's QTcpSocket.
- *
- * LTcpSocket handles the lifecycle of a connected TCP stream.
- * It maintains internal receive/transmit buffers so that I/O is
- * fully decoupled from epoll notifications.
- */
-class LTcpSocket : public LEpollHandler
+class LUnbufferedTcpSocket : public LEpollHandler
 {
-    friend class LTcpServer;
-
 public:
     enum SocketState {
         UnconnectedState,
@@ -40,30 +29,18 @@ public:
         SocketResourceError
     };
 
-    LTcpSocket();
-    explicit LTcpSocket(int socket_fd);
-    ~LTcpSocket() override;
+    LUnbufferedTcpSocket();
+    explicit LUnbufferedTcpSocket(int socketFd);
+    ~LUnbufferedTcpSocket() override;
 
     void connectToHost(const std::string &hostName, uint16_t port);
     void disconnectFromHost();
     void abort();
 
-    /** Read up to @p maxSize bytes from the internal receive buffer. */
     int64_t read(char *data, int64_t maxSize);
-
-    /** Read all remaining bytes from the internal receive buffer. */
     std::vector<uint8_t> readAll();
-
-    /** Returns the number of bytes currently buffered for reading. */
     int64_t bytesAvailable() const;
 
-    /**
-     * @brief Enqueue data for asynchronous transmission.
-     *
-     * If the transmit buffer is empty, a non-blocking send() is attempted
-     * immediately. Any unsent bytes are stored in the internal write buffer
-     * and flushed automatically when EPOLLOUT fires.
-     */
     int64_t write(const char *data, int64_t size);
     int64_t write(const std::vector<uint8_t> &data);
 
@@ -77,7 +54,6 @@ public:
     std::string peerAddress() const;
     uint16_t peerPort() const;
 
-    // Callbacks (Qt-style "signals")
     void onReadyRead(std::function<void()> callback);
     void onBytesWritten(std::function<void(int64_t bytes)> callback);
     void onConnected(std::function<void()> callback);
@@ -128,34 +104,22 @@ private:
     void setError(SocketError error, const std::string &errorString);
     void setErrorFromNative(SocketError error);
     void setState(SocketState state);
-    void compactWriteBufferIfNeeded();
-
-    /** Re-register the socket with the desired epoll interest mask. */
-    void updateEpollInterest(uint32_t events);
-
-    /** Attempt to drain the internal write buffer into the kernel. */
-    void flushWriteBuffer();
+    void registerToEventLoop(uint32_t events);
+    void unregisterFromEventLoop();
+    void updateEndpoints();
 
     bool m_registeredToEpoll = false;
-    uint32_t m_epollInterest = 0;
     LNativeTcpSocket m_nativeSocket;
 
-    SocketState m_state;
-    SocketError m_error;
+    SocketState m_state = UnconnectedState;
+    SocketError m_error = UnknownSocketError;
     std::string m_errorString;
 
     std::string m_localAddress;
     uint16_t m_localPort = 0;
-
     std::string m_peerAddress;
     uint16_t m_peerPort = 0;
 
-    // Internal buffers decouple kernel I/O from user consumption.
-    LByteRingBuffer m_readBuffer;
-    std::vector<uint8_t> m_writeBuffer;
-    size_t m_writeStart = 0;
-
-    // Callbacks
     std::function<void()> m_readyReadCallback;
     std::function<void(int64_t)> m_bytesWrittenCallback;
     std::function<void()> m_connectedCallback;

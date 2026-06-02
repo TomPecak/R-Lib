@@ -7,15 +7,14 @@
 #include <string>
 
 #include "LEventLoop.hpp"
-
-class LTcpSocket;
+#include "LTcpSocket.hpp"
 
 /**
  * @brief TCP server wrapper analogous to Qt's QTcpServer.
  *
  * LTcpServer manages a listening socket. When a client connects,
- * it accepts the connection, creates an LTcpSocket instance, and
- * enqueues it for retrieval via nextPendingConnection().
+ * it accepts the connection and enqueues the descriptor for later
+ * socket construction via nextPendingConnection().
  */
 class LTcpServer : public LEpollHandler
 {
@@ -29,7 +28,18 @@ public:
     void close();
 
     bool hasPendingConnections() const;
-    std::unique_ptr<LTcpSocket> nextPendingConnection();
+
+    template<typename SocketType = LTcpSocket>
+    std::unique_ptr<SocketType> nextPendingConnection()
+    {
+        if (m_pendingConnections.empty()) {
+            return nullptr;
+        }
+
+        int fd = m_pendingConnections.front();
+        m_pendingConnections.pop();
+        return std::make_unique<SocketType>(fd);
+    }
 
     void onNewConnection(std::function<void()> callback);
 
@@ -44,6 +54,6 @@ protected:
 
 private:
     int m_server_fd = -1;
-    std::queue<std::unique_ptr<LTcpSocket>> m_pendingConnections;
+    std::queue<int> m_pendingConnections;
     std::function<void()> m_newConnectionCallback;
 };

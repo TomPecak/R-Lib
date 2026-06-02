@@ -1,5 +1,4 @@
 #include "LTcpServer.hpp"
-#include "LTcpSocket.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -86,6 +85,7 @@ bool LTcpServer::listen(const std::string &address, uint16_t port)
 void LTcpServer::close()
 {
     while (!m_pendingConnections.empty()) {
+        ::close(m_pendingConnections.front());
         m_pendingConnections.pop();
     }
 
@@ -102,16 +102,6 @@ void LTcpServer::close()
 bool LTcpServer::hasPendingConnections() const
 {
     return !m_pendingConnections.empty();
-}
-
-std::unique_ptr<LTcpSocket> LTcpServer::nextPendingConnection()
-{
-    if (m_pendingConnections.empty())
-        return nullptr;
-
-    auto socket = std::move(m_pendingConnections.front());
-    m_pendingConnections.pop();
-    return socket;
 }
 
 void LTcpServer::onNewConnection(std::function<void()> callback)
@@ -136,8 +126,7 @@ void LTcpServer::handleEpollEvent(uint32_t events)
                 break;
             }
 
-            auto socket = std::unique_ptr<LTcpSocket>(new LTcpSocket(client_fd));
-            m_pendingConnections.push(std::move(socket));
+            m_pendingConnections.push(client_fd);
 
             if (m_newConnectionCallback) {
                 m_newConnectionCallback();

@@ -1,7 +1,6 @@
 #include "LEventLoop.hpp"
 
 #include <sys/epoll.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -11,7 +10,6 @@
 thread_local LEventLoop *t_currentLoop = nullptr;
 
 LEventLoop::LEventLoop()
-    : m_running(false)
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
     t_currentLoop = this;
@@ -20,23 +18,18 @@ LEventLoop::LEventLoop()
         std::cerr << "LEventLoop epoll_create1 error: " << strerror(errno) << std::endl;
     }
 
-m_event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (m_event_fd != -1) {
-        struct epoll_event event;
-        event.events = EPOLLIN;
-        event.data.ptr = nullptr;
-        epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, m_event_fd, &event);
+    if (m_epoll_fd != -1 && !m_taskQueue.attach(this)) {
+        std::cerr << "LEventLoop task queue setup error: " << strerror(errno) << std::endl;
     }
 }
 
 LEventLoop::~LEventLoop()
 {
     t_currentLoop = nullptr;
-    if (m_event_fd != -1) {
-        close(m_event_fd);
-        m_event_fd = -1;
+    m_taskQueue.detach();
+    if (m_epoll_fd != -1) {
+        close(m_epoll_fd);
     }
-    close(m_epoll_fd);
     m_epoll_fd = -1;
     std::cout << __PRETTY_FUNCTION__ << std::endl;
 }
@@ -95,10 +88,6 @@ int LEventLoop::exec()
             auto *handler = static_cast<LEpollHandler *>(events[i].data.ptr);
             if (handler) {
                 handler->handleEpollEvent(events[i].events);
-            } else {
-                uint64_t val;
-                (void)::read(m_event_fd, &val, sizeof(val));
-                flushTasks();
             }
         }
     }
@@ -119,19 +108,5 @@ LEventLoop *LEventLoop::current()
 
 void LEventLoop::postTask(std::function<void()> task)
 {
-    m_taskQueue.push(std::move(task));
-    if (m_event_fd != -1) {
-        uint64_t val = 1;
-        (void)::write(m_event_fd, &val, sizeof(val));
-    }
-}
-
-void LEventLoop::flushTasks()
-{
-    std::vector<std::function<void()>> tasks = m_taskQueue.takeAll();
-    for (auto &task : tasks) {
-        if (task) {
-            task();
-        }
-    }
+    m_taskQueue.postTask(std::move(task));
 }

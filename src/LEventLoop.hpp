@@ -1,15 +1,8 @@
 #pragma once
-#include <cstdint>
 #include <functional>
 
+#include "LEpollHandler.hpp"
 #include "LTaskQueue.hpp"
-
-class LEpollHandler
-{
-public:
-    virtual ~LEpollHandler() = default;
-    virtual void handleEpollEvent(uint32_t events) = 0;
-};
 
 class LEventLoop
 {
@@ -30,10 +23,7 @@ public:
     void postTask(std::function<void()> task);
 
 private:
-    void flushTasks();
-
-    int m_epoll_fd;
-    bool m_running;
-    int m_event_fd = -1;
+    int m_epoll_fd = -1;
+    bool m_running = false;
     LTaskQueue m_taskQueue;
 };
