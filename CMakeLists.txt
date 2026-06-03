@@ -6,3 +6,5 @@ add_subdirectory(src/)
 add_subdirectory(sample_app/)
 add_subdirectory(examples/)
 add_subdirectory(tests/)
+
+add_subdirectory(RLib-drm-experimental/)
