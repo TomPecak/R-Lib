@@ -4,31 +4,29 @@
 #include <functional>
 #include <string>
 
-#include <LEventLoop.hpp>
-
 class LDrmDevice;
-struct LScreenInfo;
+struct LConnectorInfo;
 struct gbm_surface;
+struct gbm_bo;
+struct _drmModeCrtc;
 
-class LScreenSurface : public LEpollHandler
+class LScreenSurface
 {
+    //grand access to handlePageFlip() methd
+    friend class LDrmDevice;
+
 public:
-    // First Initialization method
-    LScreenSurface(LDrmDevice *device, const LScreenInfo &screenInfo);
-
-    // Second Initialization method
+    // First initialization method
+    LScreenSurface(LDrmDevice *device, const LConnectorInfo &connectorInfo);
     explicit LScreenSurface(LDrmDevice *device);
+    ~LScreenSurface();
+
     void setupOutput(const std::string &screenName);
-
-    // setupPrimaryOutput(); is this method really needed?
-
-    ~LScreenSurface() override;
 
     uint32_t width() const;
     uint32_t height() const;
 
     void swapBuffers();
-    //void requestFrame(); ?????
 
     // Event Loop callbacks
     void onFrameReady(std::function<void()> callback);
@@ -39,22 +37,37 @@ public:
     //Optional for Vulkan? or let Vulkan full control
     //void presentImage(uint32_t imageIndex);
 
-protected:
-    void handleEpollEvent(uint32_t events) override;
+    //callback from epoll drm
+    void handlePageFlip();
 
 private:
-    void processDrmEvents();
+    void setupInternal(const LConnectorInfo &screenInfo);
 
-    LDrmDevice *m_device;
+    uint32_t getFramebufferId(gbm_bo *bo);
+
+    LDrmDevice *m_device = nullptr;
     gbm_surface *m_gbmSurface = nullptr;
 
     uint32_t m_width = 0;
     uint32_t m_height = 0;
 
-    // Internal ID for KMS
     uint32_t m_connectorId = 0;
     uint32_t m_crtcId = 0;
 
     std::function<void()> m_frameReadyCallback;
     bool m_pageFlipPending = false;
+    bool m_firstFrame = true;
+
+    // State preservation (so we can restore the console/X11 screen on exit)
+    _drmModeCrtc *m_savedCrtc = nullptr;
+
+    // Buffer tracking structure
+    struct BufferContext
+    {
+        gbm_bo *bo = nullptr;
+        uint32_t fbId = 0;
+    };
+
+    BufferContext m_currentBuffer;
+    BufferContext m_nextBuffer;
 };

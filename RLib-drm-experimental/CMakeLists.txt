@@ -5,6 +5,9 @@ project(RLib-drm LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# sudo apt update
+# sudo apt install pkg-config cmake build-essential libdrm-dev libgbm-dev libegl-dev libgl-dev libgles2-dev
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DRM REQUIRED libdrm)
 pkg_check_modules(GBM REQUIRED gbm)

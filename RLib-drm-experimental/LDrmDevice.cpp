@@ -1,11 +1,14 @@
 #include "LDrmDevice.hpp"
+#include "LScreenSurface.hpp" // <-- Needed for handlePageFlip
 
 #include <fcntl.h>
 #include <gbm.h>
+#include <sys/epoll.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include <cstring>
 #include <iostream>
 
 // Helper function converting DRM constants to readable strings
@@ -85,6 +88,16 @@ static std::string getConnectorName(drmModeConnector *conn)
     return typeName + "-" + std::to_string(conn->connector_type_id);
 }
 
+static void drmPageFlipHandler(
+    int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, void *user_data)
+{
+    //what if menwhile LScreenSurface gonna be deleted ?
+    auto *surface = static_cast<LScreenSurface *>(user_data);
+    if (surface) {
+        surface->handlePageFlip();
+    }
+}
+
 LDrmDevice::LDrmDevice()
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
@@ -156,6 +169,12 @@ bool LDrmDevice::open(const std::string &nodePath)
         return false;
     }
 
+    LEventLoop *loop = LEventLoop::current();
+    if (loop && !m_registeredToEpoll) {
+        m_registeredToEpoll = loop->registerHandler(m_fd, EPOLLIN, this);
+        std::cout << "[LDrmDevice] [INFO] Registered DRM fd to EventLoop." << std::endl;
+    }
+
     std::cout << "[LDrmDevice] [INFO] Successfully opened and initialized DRM/GBM on: " << nodePath
               << std::endl;
     return true;
@@ -163,6 +182,12 @@ bool LDrmDevice::open(const std::string &nodePath)
 
 void LDrmDevice::close()
 {
+    LEventLoop *loop = LEventLoop::current();
+    if (loop && m_registeredToEpoll && m_fd >= 0) {
+        loop->unregisterHandler(m_fd);
+        m_registeredToEpoll = false;
+    }
+
     if (m_gbm) {
         gbm_device_destroy(m_gbm);
         std::cout << "[LDrmDevice] [INFO] Destroy GBM" << std::endl;
@@ -204,9 +229,41 @@ std::string LDrmDevice::deviceName() const
     return name;
 }
 
-std::vector<LScreenInfo> LDrmDevice::allScreens() const
+void LDrmDevice::registerSurface(uint32_t crtcId, LScreenSurface *surface)
 {
-    std::vector<LScreenInfo> screens;
+    if (crtcId != 0 && surface != nullptr) {
+        m_activeSurfaces[crtcId] = surface;
+        std::cout << "[LDrmDevice] [INFO] Surface registered for CRTC ID: " << crtcId << std::endl;
+    }
+}
+
+void LDrmDevice::unregisterSurface(uint32_t crtcId)
+{
+    if (m_activeSurfaces.erase(crtcId)) {
+        std::cout << "[LDrmDevice] [INFO] Surface unregistered for CRTC ID: " << crtcId
+                  << std::endl;
+    }
+}
+
+void LDrmDevice::handleEpollEvent(uint32_t events)
+{
+    if (events & EPOLLIN) {
+        // We set up the context and tell it which functions to call when event is parsed
+        drmEventContext evctx;
+        std::memset(&evctx, 0, sizeof(evctx));
+        evctx.version = 2; // version 2 provides page_flip_handler
+        evctx.page_flip_handler = drmPageFlipHandler;
+
+        // This function reads the file descriptor and fires the callback
+        if (drmHandleEvent(m_fd, &evctx) != 0) {
+            std::cerr << "[LDrmDevice] [ERROR] Failed to handle DRM event!" << std::endl;
+        }
+    }
+}
+
+std::vector<LConnectorInfo> LDrmDevice::allConnectors() const
+{
+    std::vector<LConnectorInfo> screens;
     if (!isOpen())
         return screens;
 
@@ -220,21 +277,32 @@ std::vector<LScreenInfo> LDrmDevice::allScreens() const
         if (!connector)
             continue;
 
-        LScreenInfo info;
+        LConnectorInfo info;
         info.connectorId = connector->connector_id;
         info.name = getConnectorName(connector);
         info.connected = (connector->connection == DRM_MODE_CONNECTED);
-        info.physicalWidthMm = connector->mmWidth;
-        info.physicalHeightMm = connector->mmHeight;
+        info.displayPhysicalWidthMm = connector->mmWidth;
+        info.displayPhysicalHeightMm = connector->mmHeight;
 
-        // If the display is connected, look for the resolution
+        // If the display is connected, look for the resolutions
         if (info.connected && connector->count_modes > 0) {
             // DRM returns modes sorted so that the first one (index 0)
             // is usually the native (best) resolution.
-            const drmModeModeInfo &mode = connector->modes[0];
-            info.width = mode.hdisplay;
-            info.height = mode.vdisplay;
-            info.refreshRate = mode.vrefresh;
+            const drmModeModeInfo &preferredMode = connector->modes[0];
+            info.displayWidth = preferredMode.hdisplay;
+            info.displayHeight = preferredMode.vdisplay;
+            info.displayRefreshRate = preferredMode.vrefresh;
+
+            // Get all modes
+            for (int j = 0; j < connector->count_modes; ++j) {
+                const drmModeModeInfo &mode = connector->modes[j];
+                LDisplayMode displayMode;
+                displayMode.width = mode.hdisplay;
+                displayMode.height = mode.vdisplay;
+                displayMode.refreshRate = mode.vrefresh;
+
+                info.availableModes.push_back(displayMode);
+            }
         }
 
         screens.push_back(info);
@@ -245,10 +313,10 @@ std::vector<LScreenInfo> LDrmDevice::allScreens() const
     return screens;
 }
 
-std::vector<LScreenInfo> LDrmDevice::connectedScreens() const
+std::vector<LConnectorInfo> LDrmDevice::connectedConnectors() const
 {
-    auto all = allScreens();
-    std::vector<LScreenInfo> connected;
+    auto all = allConnectors();
+    std::vector<LConnectorInfo> connected;
     for (const auto &screen : all) {
         if (screen.connected) {
             connected.push_back(screen);
@@ -257,11 +325,11 @@ std::vector<LScreenInfo> LDrmDevice::connectedScreens() const
     return connected;
 }
 
-LScreenInfo LDrmDevice::primaryScreen() const
+LConnectorInfo LDrmDevice::primaryConnector() const
 {
-    auto screens = connectedScreens();
+    auto screens = connectedConnectors();
     if (screens.empty()) {
-        return LScreenInfo{};
+        return LConnectorInfo{};
     }
 
     // First, we look for built-in screens (usually the main ones in laptops/tablets)

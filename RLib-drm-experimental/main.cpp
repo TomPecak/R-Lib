@@ -15,20 +15,25 @@ int main()
     //LEventLoop loop;
 
     LDrmDevice gpu;
-    //gpu.open("/dev/dri/card1");
     gpu.openAuto();
 
     std::cout << "Found card: " << gpu.deviceName() << std::endl;
-    for (const auto &screen : gpu.connectedScreens()) {
-        std::cout << "Screen: " << screen.name << " " << screen.width << "x" << screen.height << "@"
-                  << screen.refreshRate << "Hz" << std::endl;
+
+    for (const auto &connector : gpu.connectedConnectors()) {
+        std::cout << "Screen: " << connector.name << " " << connector.displayWidth << "x"
+                  << connector.displayHeight << "@" << connector.displayRefreshRate << "Hz"
+                  << std::endl;
     }
 
-    LScreenInfo primaryScreen = gpu.primaryScreen();
-    std::cout << "Primary screen: " << primaryScreen.name << " " << primaryScreen.width << "x"
-              << primaryScreen.height << "@" << primaryScreen.refreshRate << "Hz" << std::endl;
+    LConnectorInfo primaryConnector = gpu.primaryConnector();
+    std::cout << "Primary connector: " << primaryConnector.name << " "
+              << primaryConnector.displayWidth << "x" << primaryConnector.displayHeight << "@"
+              << primaryConnector.displayRefreshRate << "Hz" << std::endl;
 
     std::cout << "Hello DRM!" << std::endl;
+
+    LScreenSurface screenSurface(&gpu, primaryConnector);
+
     //return loop.exec();
 }
 
