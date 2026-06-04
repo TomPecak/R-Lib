@@ -55,8 +55,10 @@ void LTaskQueue::detach()
 
 void LTaskQueue::postTask(std::function<void()> task)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_pendingTasks.push_back(std::move(task));
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingTasks.push_back(std::move(task));
+    }
 
     if (m_event_fd != -1) {
         uint64_t val = 1;
