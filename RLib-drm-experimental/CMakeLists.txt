@@ -26,7 +26,9 @@ add_executable(RLib-drm-app main.cpp
     LVulkanCore.hpp
     LEglContext.hpp
     LEglContext.cpp
-    LVulkanContext.hpp)
+    LVulkanContext.hpp
+    linmath.h
+)
 
 target_include_directories(RLib-drm-app PRIVATE
     ${DRM_INCLUDE_DIRS}
