@@ -25,7 +25,7 @@ public:
     bool makeCurrent(LScreenSurface *screen);
 
     // Flushes the rendered EGL frame to the GBM buffer pool
-    void swap(LScreenSurface *screen);
+    void swap();
 
 private:
     Api m_api = OpenGLES;

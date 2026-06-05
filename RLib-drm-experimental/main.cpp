@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include <cstdint>
 #include <iostream>
 
@@ -8,10 +10,12 @@
 #include "LEglContext.hpp"
 #include "LScreenSurface.hpp"
 
+#include <GL/gl.h>
+
 //dummy OpenGl funcions
-void glViewport(int x, int y, uint32_t width, uint32_t height) {}
-void glClearColor(float red, float green, float blue, float alpha) {}
-void glClear(uint32_t mask) {}
+// void glViewport(int x, int y, uint32_t width, uint32_t height) {}
+// void glClearColor(float red, float green, float blue, float alpha) {}
+// void glClear(uint32_t mask) {}
 
 int main()
 {
@@ -43,11 +47,31 @@ int main()
     context.create(&gpu);
     context.makeCurrent(&screenSurface);
 
+    screenSurface.onFrameReady([&]() {
+        glViewport(0, 0, screenSurface.width(), screenSurface.height());
+        static float time = 0.0f;
+        time += 0.01f;
+        float r = 0.5f + 0.5f * sinf(time);
+        float g = 0.5f + 0.5f * sinf(time + 2.0f);
+        glClearColor(r, g, 1.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        context.swap();
+        screenSurface.swapBuffers();
+    });
+
+    glViewport(0, 0, screenSurface.width(), screenSurface.height());
+    glClearColor(0.847f, 0.937f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    context.swap();
+    screenSurface.swapBuffers();
+
     //------------------------------------------------------
 
     LTimer quitTimer;
     quitTimer.onTimeout([]() { LEventLoop::quit(); });
-    quitTimer.start(5000);
+    quitTimer.start(10000);
     return loop.exec();
 }
 

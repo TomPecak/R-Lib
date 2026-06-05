@@ -4,13 +4,12 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h> // Required for modern (platform-based) EGL with GBM
+#include <gbm.h>        // Wymagane dla definicji GBM_FORMAT_XRGB8888
 
 #include <iostream>
 #include <stdexcept>
 #include <vector>
 
-// Modern Display loading function typedef
-// We use PFNEGLGETPLATFORMDISPLAYEXTPROC instead of the deprecated eglGetDisplay
 static PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT_ptr = nullptr;
 
 LEglContext::LEglContext() {}
@@ -73,8 +72,7 @@ bool LEglContext::create(LDrmDevice *device)
         }
     }
 
-    // 5. Search for an appropriate color/buffer configuration
-    // For hardware DRM, the 32-bit XRGB8888 format is the most desirable (no alpha channel in the window).
+    // 5. Wyszukiwanie ZGODNEGO EGLConfig z GBM_FORMAT_XRGB8888
     const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
                                     EGL_WINDOW_BIT,
                                     EGL_RED_SIZE,
@@ -90,8 +88,35 @@ bool LEglContext::create(LDrmDevice *device)
                                     EGL_NONE};
 
     EGLint numConfigs;
-    if (!eglChooseConfig(m_display, configAttribs, &m_config, 1, &numConfigs) || numConfigs != 1) {
-        std::cerr << "[LEglContext] [ERROR] Failed to find a suitable EGL config!" << std::endl;
+    // Najpierw pytamy EGL ile ma JAKICHKOLWIEK konfiguracji pasujących do naszych wymagań
+    if (!eglChooseConfig(m_display, configAttribs, nullptr, 0, &numConfigs) || numConfigs == 0) {
+        std::cerr << "[LEglContext] [ERROR] Failed to find ANY suitable EGL config!" << std::endl;
+        return false;
+    }
+
+    std::vector<EGLConfig> configs(numConfigs);
+    if (!eglChooseConfig(m_display, configAttribs, configs.data(), numConfigs, &numConfigs)) {
+        std::cerr << "[LEglContext] [ERROR] Failed to fetch EGL configs!" << std::endl;
+        return false;
+    }
+
+    // Teraz przeszukujemy wszystkie konfiguracje, szukając tej o identyfikatorze XRGB8888
+    bool foundConfig = false;
+    for (EGLConfig cfg : configs) {
+        EGLint visualId;
+        if (eglGetConfigAttrib(m_display, cfg, EGL_NATIVE_VISUAL_ID, &visualId)) {
+            if (visualId == GBM_FORMAT_XRGB8888) { // To gwarantuje nam pełną zgodność!
+                m_config = cfg;
+                foundConfig = true;
+                break;
+            }
+        }
+    }
+
+    if (!foundConfig) {
+        std::cerr << "[LEglContext] [ERROR] Could not find EGL config strictly matching "
+                     "GBM_FORMAT_XRGB8888!"
+                  << std::endl;
         return false;
     }
 
@@ -103,7 +128,7 @@ bool LEglContext::create(LDrmDevice *device)
     contextAttribs.push_back(m_minor);
 
     if (m_api == OpenGL) {
-        // Modern Core Profile for OpenGL (drops legacy compatibility baggage)
+        // Modern Core Profile for OpenGL
         contextAttribs.push_back(EGL_CONTEXT_OPENGL_PROFILE_MASK);
         contextAttribs.push_back(EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT);
     }
@@ -125,17 +150,14 @@ bool LEglContext::create(LDrmDevice *device)
 void LEglContext::destroy()
 {
     if (m_display != EGL_NO_DISPLAY) {
-        // We must unbind the context from the current thread before destroying it
         eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        m_currentAttachedScreen = nullptr; // Clear the cache
+        m_currentAttachedScreen = nullptr;
 
         if (m_context != EGL_NO_CONTEXT) {
             eglDestroyContext(m_display, m_context);
             m_context = EGL_NO_CONTEXT;
         }
 
-        // Note: All created EGLSurfaces attached to LScreenSurface are automatically
-        // destroyed by the EGL implementation when eglTerminate is called.
         eglTerminate(m_display);
         m_display = EGL_NO_DISPLAY;
         std::cout << "[LEglContext] [INFO] Context destroyed." << std::endl;
@@ -150,20 +172,13 @@ bool LEglContext::makeCurrent(LScreenSurface *screen)
         return false;
     }
 
-    // EARLY RETURN OPTIMIZATION:
-    // If the requested screen is already the active one, we skip the heavy EGL state switch.
-    // The "eglSurface() != nullptr" check protects us from pointer aliasing (memory reuse)
-    // in case a new LScreenSurface was created at the exact same memory address as an old one.
     if (m_currentAttachedScreen == screen && screen->eglSurface() != nullptr) {
         return true;
     }
 
-    // Cast void* back to EGLSurface
     EGLSurface screenEglSurface = static_cast<EGLSurface>(screen->eglSurface());
 
-    // If the screen doesn't have an EGL surface created yet, we must create it once
     if (screenEglSurface == nullptr) {
-        // screen->nativeSurface() returns a pointer to gbm_surface. EGL knows how to handle it.
         screenEglSurface = eglCreateWindowSurface(m_display,
                                                   m_config,
                                                   reinterpret_cast<EGLNativeWindowType>(
@@ -171,33 +186,34 @@ bool LEglContext::makeCurrent(LScreenSurface *screen)
                                                   nullptr);
 
         if (screenEglSurface == EGL_NO_SURFACE) {
-            std::cerr << "[LEglContext] [ERROR] Failed to create EGL Window Surface from GBM!"
-                      << std::endl;
-            m_currentAttachedScreen = nullptr; // Reset cache on failure
+            EGLint err = eglGetError();
+            std::cerr << "[LEglContext] [ERROR] Failed to create EGL Window Surface from GBM! "
+                      << "EGL Error Code: 0x" << std::hex << err << std::dec << std::endl;
+            m_currentAttachedScreen = nullptr;
             return false;
         }
 
-        // Save the surface inside the screen to avoid recreating it every frame!
         screen->setEglSurface(screenEglSurface);
     }
 
-    // Bind the thread context (C and C++ are multi-threaded languages, this specifies where GL commands go)
     if (!eglMakeCurrent(m_display, screenEglSurface, screenEglSurface, m_context)) {
-        std::cerr << "[LEglContext] [ERROR] eglMakeCurrent failed!" << std::endl;
-        m_currentAttachedScreen = nullptr; // Reset cache on failure
+        EGLint err = eglGetError();
+        std::cerr << "[LEglContext] [ERROR] eglMakeCurrent failed! EGL Error Code: 0x" << std::hex
+                  << err << std::dec << std::endl;
+        m_currentAttachedScreen = nullptr;
         return false;
     }
 
-    // Successfully switched the context, update our cache
     m_currentAttachedScreen = screen;
     return true;
 }
 
-void LEglContext::swap(LScreenSurface *screen)
+void LEglContext::swap()
 {
-    if (screen && screen->eglSurface()) {
-        // This command forces the EGL driver (e.g. Mesa) to complete operations (Flush)
-        // and make the front-buffer available back to GBM, from which your swapBuffers will pick the frame ID!
-        eglSwapBuffers(m_display, static_cast<EGLSurface>(screen->eglSurface()));
+    if (m_currentAttachedScreen && m_currentAttachedScreen->eglSurface()) {
+        eglSwapBuffers(m_display, static_cast<EGLSurface>(m_currentAttachedScreen->eglSurface()));
+    } else {
+        std::cerr << "[LEglContext] [WARNING] swap() called but no screen is currently attached."
+                  << std::endl;
     }
 }
