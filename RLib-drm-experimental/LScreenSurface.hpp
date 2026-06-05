@@ -12,7 +12,7 @@ struct _drmModeCrtc;
 
 class LScreenSurface
 {
-    //grand access to handlePageFlip() methd
+    // Grant access to handlePageFlip() method
     friend class LDrmDevice;
 
 public:
@@ -34,11 +34,15 @@ public:
     // Methods for EGL/Vulkan layer
     gbm_surface *nativeSurface() const;
 
-    //Optional for Vulkan? or let Vulkan full control
-    //void presentImage(uint32_t imageIndex);
+    // Optional for Vulkan? or let Vulkan take full control
+    // void presentImage(uint32_t imageIndex);
 
-    //callback from epoll drm
+    // Callback from epoll drm
     void handlePageFlip();
+
+    // Removed 'const' to strictly satisfy C++ rules when returning a modifiable pointer
+    void *eglSurface() { return m_eglSurface; }
+    void setEglSurface(void *surface) { m_eglSurface = surface; }
 
 private:
     void setupInternal(const LConnectorInfo &screenInfo);
@@ -70,4 +74,6 @@ private:
 
     BufferContext m_currentBuffer;
     BufferContext m_nextBuffer;
+
+    void *m_eglSurface = nullptr;
 };

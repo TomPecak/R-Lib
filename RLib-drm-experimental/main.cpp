@@ -2,17 +2,20 @@
 #include <iostream>
 
 #include <LEventLoop.hpp>
+#include <LTimer.hpp>
 
 #include "LDrmDevice.hpp"
 #include "LEglContext.hpp"
 #include "LScreenSurface.hpp"
 
-//dummy glViewport
+//dummy OpenGl funcions
 void glViewport(int x, int y, uint32_t width, uint32_t height) {}
+void glClearColor(float red, float green, float blue, float alpha) {}
+void glClear(uint32_t mask) {}
 
 int main()
 {
-    //LEventLoop loop;
+    LEventLoop loop;
 
     LDrmDevice gpu;
     gpu.openAuto();
@@ -34,7 +37,18 @@ int main()
 
     LScreenSurface screenSurface(&gpu, primaryConnector);
 
-    //return loop.exec();
+    LEglContext context;
+    std::cout << "---------------1--------------";
+    context.setFormat(LEglContext::OpenGL, 4, 0);
+    context.create(&gpu);
+    context.makeCurrent(&screenSurface);
+
+    //------------------------------------------------------
+
+    LTimer quitTimer;
+    quitTimer.onTimeout([]() { LEventLoop::quit(); });
+    quitTimer.start(5000);
+    return loop.exec();
 }
 
 /*
@@ -74,7 +88,11 @@ sudo apt install pkg-config cmake build-essential \
 //     screenMain.onFrameReady([&]() {
 //         // Activate full OpenGL for the main screen
 //         desktopGlContext.makeCurrent(&screenMain);
+
 //         glViewport(0, 0, screenMain.width(), screenMain.height());
+//         glClearColor(0.847f, 0.937f, 1.0f, 1.0f);
+//         glClear(GL_COLOR_BUFFER_BIT);
+
 //         // ... here we use OpenGL 4.5 specific functions (e.g., Geometry Shaders)
 //         screenMain.swapBuffers();
 //     });

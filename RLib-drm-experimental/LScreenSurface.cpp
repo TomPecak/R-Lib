@@ -55,7 +55,6 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
     drmModeConnector *conn = drmModeGetConnector(fd, m_connectorId);
 
     // 1. Find a suitable CRTC (Display Controller) for this connector
-    // Try currently assigned encoder first
     if (conn->encoder_id) {
         drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoder_id);
         if (enc) {
@@ -113,6 +112,13 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
 
 LScreenSurface::~LScreenSurface()
 {
+    // Sanity check to ensure LEglContext was destroyed before the ScreenSurface
+    if (m_eglSurface != nullptr) {
+        std::cerr
+            << "[LScreenSurface] [WARNING] Surface destroyed while EGLSurface is still attached. "
+            << "Make sure to destroy LEglContext BEFORE LScreenSurface." << std::endl;
+    }
+
     if (m_device && m_crtcId != 0) {
         // Restore previous screen state
         if (m_savedCrtc) {
@@ -203,11 +209,10 @@ void LScreenSurface::swapBuffers()
 
     if (m_firstFrame) {
         // DRM rule: The first frame MUST be presented synchronously using SetCrtc
-        drmModeModeInfo mode; // We need to pass the mode to set up CRTC
+        drmModeModeInfo mode;
         auto connectors = m_device->connectedConnectors();
         for (const auto &c : connectors) {
             if (c.connectorId == m_connectorId && !c.availableModes.empty()) {
-                // Find matching mode structure
                 drmModeRes *res = drmModeGetResources(m_device->fd());
                 drmModeConnector *conn = drmModeGetConnector(m_device->fd(), m_connectorId);
                 mode = conn->modes[0]; // Assuming native
