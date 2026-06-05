@@ -2,9 +2,10 @@
 
 class LDrmDevice;
 class LScreenSurface;
+
 typedef void *EGLDisplay;
 typedef void *EGLContext;
-typedef void *EGLSurface;
+typedef void *EGLConfig; // Needed for validation!
 
 class LEglContext
 {
@@ -16,15 +17,15 @@ public:
 
     void setFormat(Api api, int majorVersion, int minorVersion);
 
-    bool create(LDrmDevice *device); //is this method really needed?
-    // Initializes the context for a given surface
-    bool create(LScreenSurface *surface);
+    // Creates the main context for a given graphics driver
+    bool create(LDrmDevice *device);
     void destroy();
 
+    // Makes the current thread and context draw to the given screen
     bool makeCurrent(LScreenSurface *screen);
 
-    // Needed for LScreenSurface::swapBuffers, although it is often integrated
-    void swap();
+    // Flushes the rendered EGL frame to the GBM buffer pool
+    void swap(LScreenSurface *screen);
 
 private:
     Api m_api = OpenGLES;
@@ -33,6 +34,8 @@ private:
 
     EGLDisplay m_display = nullptr;
     EGLContext m_context = nullptr;
-    EGLSurface m_surface = nullptr;
-    LScreenSurface *m_targetSurface = nullptr;
+    EGLConfig m_config = nullptr;
+
+    // Tracks the currently bound surface to prevent redundant eglMakeCurrent calls
+    LScreenSurface *m_currentAttachedScreen = nullptr;
 };
