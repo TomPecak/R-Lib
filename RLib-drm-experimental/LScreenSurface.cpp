@@ -112,13 +112,6 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
 
 LScreenSurface::~LScreenSurface()
 {
-    // Sanity check to ensure LEglContext was destroyed before the ScreenSurface
-    if (m_eglSurface != nullptr) {
-        std::cerr
-            << "[LScreenSurface] [WARNING] Surface destroyed while EGLSurface is still attached. "
-            << "Make sure to destroy LEglContext BEFORE LScreenSurface." << std::endl;
-    }
-
     if (m_device && m_crtcId != 0) {
         // Restore previous screen state
         if (m_savedCrtc) {
