@@ -154,14 +154,10 @@ int64_t LTcpSocket::read(char *data, int64_t maxSize)
     size_t bytesToRead = std::min<size_t>(static_cast<size_t>(maxSize), available);
     m_readBuffer.read(reinterpret_cast<uint8_t *>(data), bytesToRead);
 
-    if (!m_readBuffer.empty() && m_readyReadCallback) {
-        LEventLoop *loop = LEventLoop::current();
-        if (loop) {
-            loop->postTask([this]() {
-                if (!m_readBuffer.empty() && m_readyReadCallback) {
-                    m_readyReadCallback();
-                }
-            });
+    if (m_maxReadBufferSize > 0 && m_readBuffer.size() < m_maxReadBufferSize) {
+        if (!(m_epollInterest & EPOLLIN)) {
+            m_epollInterest |= EPOLLIN;
+            updateEpollInterest(m_epollInterest);
         }
     }
     return static_cast<int64_t>(bytesToRead);
@@ -169,12 +165,35 @@ int64_t LTcpSocket::read(char *data, int64_t maxSize)
 
 std::vector<uint8_t> LTcpSocket::readAll()
 {
-    return m_readBuffer.readAll();
+    auto data = m_readBuffer.readAll();
+    if (m_maxReadBufferSize > 0 && m_readBuffer.size() < m_maxReadBufferSize) {
+        if (!(m_epollInterest & EPOLLIN)) {
+            m_epollInterest |= EPOLLIN;
+            updateEpollInterest(m_epollInterest);
+        }
+    }
+    return data;
 }
 
 int64_t LTcpSocket::bytesAvailable() const
 {
     return static_cast<int64_t>(m_readBuffer.size());
+}
+
+void LTcpSocket::setMaxReadBufferSize(size_t limit)
+{
+    m_maxReadBufferSize = limit;
+    if (m_maxReadBufferSize == 0 || m_readBuffer.size() < m_maxReadBufferSize) {
+        if (!(m_epollInterest & EPOLLIN)) {
+            m_epollInterest |= EPOLLIN;
+            updateEpollInterest(m_epollInterest);
+        }
+    }
+}
+
+size_t LTcpSocket::maxReadBufferSize() const
+{
+    return m_maxReadBufferSize;
 }
 
 int64_t LTcpSocket::write(const char *data, int64_t size)
@@ -382,7 +401,17 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
         if (m_state == ConnectedState || m_state == ClosingState) {
             uint8_t chunk[65536];
             while (true) {
-                ssize_t ret = m_nativeSocket.recvSome(chunk, sizeof(chunk), 0);
+                size_t toRead = sizeof(chunk);
+                if (m_maxReadBufferSize > 0) {
+                    if (m_readBuffer.size() >= m_maxReadBufferSize) {
+                        m_epollInterest &= ~EPOLLIN;
+                        updateEpollInterest(m_epollInterest);
+                        break;
+                    }
+                    toRead = std::min<size_t>(toRead, m_maxReadBufferSize - m_readBuffer.size());
+                }
+
+                ssize_t ret = m_nativeSocket.recvSome(chunk, toRead, 0);
                 if (ret > 0) {
                     m_readBuffer.append(chunk, static_cast<size_t>(ret));
                     continue;

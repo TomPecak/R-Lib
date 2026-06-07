@@ -57,6 +57,11 @@ public:
     /** Returns the number of bytes currently buffered for reading. */
     int64_t bytesAvailable() const;
 
+    /** Set the maximum size of the internal read buffer. 0 means unlimited. */
+    void setMaxReadBufferSize(size_t limit);
+    size_t maxReadBufferSize() const;
+
+
     /**
      * @brief Enqueue data for asynchronous transmission.
      *
@@ -154,6 +159,8 @@ private:
     LByteRingBuffer m_readBuffer;
     std::vector<uint8_t> m_writeBuffer;
     size_t m_writeStart = 0;
+    size_t m_maxReadBufferSize = 0;
+
 
     // Callbacks
     std::function<void()> m_readyReadCallback;
