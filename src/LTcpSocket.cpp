@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -154,10 +155,19 @@ int64_t LTcpSocket::read(char *data, int64_t maxSize)
     size_t bytesToRead = std::min<size_t>(static_cast<size_t>(maxSize), available);
     m_readBuffer.read(reinterpret_cast<uint8_t *>(data), bytesToRead);
 
-    if (m_maxReadBufferSize > 0 && m_readBuffer.size() < m_maxReadBufferSize) {
-        if (!(m_epollInterest & EPOLLIN)) {
-            m_epollInterest |= EPOLLIN;
-            updateEpollInterest(m_epollInterest);
+    // "Happy Path" optimization: 99% of the time, EPOLLIN is active.
+    // If it is missing, it means backpressure was triggered and we must check if reading can be resumed.
+    if (!(m_epollInterest & EPOLLIN)) {
+        if (m_maxReadBufferSize > 0) {
+            // Low-Water Mark concept: Prevent "epoll thrashing".
+            // Instead of re-enabling EPOLLIN immediately when the buffer drops by just 1 byte,
+            // we wait until it drops below 75% capacity. This prevents the kernel from constantly
+            // waking up the event loop and toggling flags for tiny network reads.
+            size_t lowWaterMark = m_maxReadBufferSize - (m_maxReadBufferSize / 4);
+            if (m_readBuffer.size() <= lowWaterMark) {
+                m_epollInterest |= EPOLLIN;
+                updateEpollInterest(m_epollInterest);
+            }
         }
     }
     return static_cast<int64_t>(bytesToRead);
@@ -166,8 +176,10 @@ int64_t LTcpSocket::read(char *data, int64_t maxSize)
 std::vector<uint8_t> LTcpSocket::readAll()
 {
     auto data = m_readBuffer.readAll();
-    if (m_maxReadBufferSize > 0 && m_readBuffer.size() < m_maxReadBufferSize) {
-        if (!(m_epollInterest & EPOLLIN)) {
+    // The buffer is now empty (0 bytes after readAll()).
+    // Fast path: if EPOLLIN is missing, it means we hit the limit earlier. ALWAYS restore it now.
+    if (!(m_epollInterest & EPOLLIN)) {
+        if (m_maxReadBufferSize > 0) {
             m_epollInterest |= EPOLLIN;
             updateEpollInterest(m_epollInterest);
         }
@@ -213,7 +225,7 @@ int64_t LTcpSocket::write(const char *data, int64_t size)
             }
             if (ret < size) {
                 m_writeBuffer.insert(m_writeBuffer.end(), data + ret, data + size);
-                updateEpollInterest(EPOLLIN | EPOLLOUT);
+                updateEpollInterest(m_epollInterest | EPOLLOUT);
             }
             return size;
         }
@@ -234,7 +246,7 @@ int64_t LTcpSocket::write(const char *data, int64_t size)
     }
 
     m_writeBuffer.insert(m_writeBuffer.end(), data, data + size);
-    updateEpollInterest(EPOLLIN | EPOLLOUT);
+    updateEpollInterest(m_epollInterest | EPOLLOUT);
     return size;
 }
 
@@ -279,7 +291,7 @@ void LTcpSocket::flushWriteBuffer()
     }
 
     if ((m_writeBuffer.size() - m_writeStart) == 0) {
-        updateEpollInterest(EPOLLIN);
+        updateEpollInterest(m_epollInterest & ~EPOLLOUT);
     }
 }
 
@@ -388,9 +400,9 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
                 m_connectedCallback();
             }
             if ((m_writeBuffer.size() - m_writeStart) == 0) {
-                updateEpollInterest(EPOLLIN);
+                updateEpollInterest((m_epollInterest | EPOLLIN) & ~EPOLLOUT);
             } else {
-                updateEpollInterest(EPOLLIN | EPOLLOUT);
+                updateEpollInterest(m_epollInterest | EPOLLIN | EPOLLOUT);
             }
         } else if (m_state == ConnectedState) {
             flushWriteBuffer();
@@ -399,9 +411,11 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
 
     if (events & EPOLLIN) {
         if (m_state == ConnectedState || m_state == ClosingState) {
-            uint8_t chunk[65536];
+            // stack optimization
+            static thread_local std::array<uint8_t, 65536> chunk;
+
             while (true) {
-                size_t toRead = sizeof(chunk);
+                size_t toRead = chunk.size();
                 if (m_maxReadBufferSize > 0) {
                     if (m_readBuffer.size() >= m_maxReadBufferSize) {
                         m_epollInterest &= ~EPOLLIN;
@@ -411,9 +425,10 @@ void LTcpSocket::handleEpollEvent(uint32_t events)
                     toRead = std::min<size_t>(toRead, m_maxReadBufferSize - m_readBuffer.size());
                 }
 
-                ssize_t ret = m_nativeSocket.recvSome(chunk, toRead, 0);
+                // addition to previous stack optimization comment
+                ssize_t ret = m_nativeSocket.recvSome(chunk.data(), toRead, 0);
                 if (ret > 0) {
-                    m_readBuffer.append(chunk, static_cast<size_t>(ret));
+                    m_readBuffer.append(chunk.data(), static_cast<size_t>(ret));
                     continue;
                 }
 
