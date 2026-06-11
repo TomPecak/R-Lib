@@ -22,6 +22,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(RLibTests
   test_ltimer.cpp
   test_ludpsocket.cpp
+  test_ltcpsocket.cpp
 )
 
 target_link_libraries(RLibTests
