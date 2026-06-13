@@ -6,9 +6,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(RLib STATIC
+    LByteRingBuffer.cpp
     LTimer.cpp
     LEventLoop.cpp
     LGpioPin.cpp
+    LNativeTcpSocket.cpp
+    LTcpServer.cpp
+    LTcpSocket.cpp
+    LTaskQueue.cpp
+    LUnbufferedTcpSocket.cpp
     LUdpSocket.cpp
 )
 
