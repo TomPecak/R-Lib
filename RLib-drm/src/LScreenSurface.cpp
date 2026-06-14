@@ -51,7 +51,12 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
     drmModeRes *res = drmModeGetResources(fd);
     drmModeConnector *conn = drmModeGetConnector(fd, m_connectorId);
 
-    // 1. Find a suitable CRTC (Display Controller) for this connector
+    if (conn->count_modes > 0) {
+        m_modeInfo = conn->modes[0];
+    } else {
+        std::cerr << "[LScreenSurface] [ERROR] No modes available for connector!" << std::endl;
+    }
+
     if (conn->encoder_id) {
         drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoder_id);
         if (enc) {
@@ -60,7 +65,6 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
         }
     }
 
-    // If no CRTC is assigned, find the first available one
     if (m_crtcId == 0) {
         for (int i = 0; i < conn->count_encoders; i++) {
             drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoders[i]);
@@ -89,8 +93,7 @@ void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
     // Save the original CRTC state to restore it on exit (polite to the system console)
     m_savedCrtc = drmModeGetCrtc(fd, m_crtcId);
 
-    // 2. Create the GBM Surface
-    // GBM_FORMAT_XRGB8888 is widely supported. GBM_BO_USE_SCANOUT implies it will be used for screen display.
+    // Create the GBM Surface
     m_gbmSurface = gbm_surface_create(m_device->gbmDevice(),
                                       m_width,
                                       m_height,
@@ -187,8 +190,6 @@ void LScreenSurface::swapBuffers()
         return;
     }
 
-    // Lock the front buffer so we can present it.
-    // NOTE: This assumes that EGL/Vulkan has already rendered into it!
     m_nextBuffer.bo = gbm_surface_lock_front_buffer(m_gbmSurface);
     if (!m_nextBuffer.bo) {
         std::cerr << "[LScreenSurface] [ERROR] Failed to lock GBM front buffer!" << std::endl;
@@ -198,20 +199,6 @@ void LScreenSurface::swapBuffers()
     m_nextBuffer.fbId = getFramebufferId(m_nextBuffer.bo);
 
     if (m_firstFrame) {
-        // DRM rule: The first frame MUST be presented synchronously using SetCrtc
-        drmModeModeInfo mode;
-        auto connectors = m_device->connectedConnectors();
-        for (const auto &c : connectors) {
-            if (c.connectorId == m_connectorId && !c.availableModes.empty()) {
-                drmModeRes *res = drmModeGetResources(m_device->fd());
-                drmModeConnector *conn = drmModeGetConnector(m_device->fd(), m_connectorId);
-                mode = conn->modes[0]; // Assuming native
-                drmModeFreeConnector(conn);
-                drmModeFreeResources(res);
-                break;
-            }
-        }
-
         int ret = drmModeSetCrtc(m_device->fd(),
                                  m_crtcId,
                                  m_nextBuffer.fbId,
@@ -219,16 +206,14 @@ void LScreenSurface::swapBuffers()
                                  0,
                                  &m_connectorId,
                                  1,
-                                 &mode);
+                                 &m_modeInfo); // <-- Magia dzieje się tutaj
         if (ret == 0) {
             m_firstFrame = false;
-            // Since it was synchronous, we simulate a page flip completion instantly
             handlePageFlip();
         } else {
             std::cerr << "[LScreenSurface] [ERROR] Initial drmModeSetCrtc failed!" << std::endl;
         }
     } else {
-        // Asynchronous Page Flip for smooth vsync
         int ret = drmModePageFlip(m_device->fd(),
                                   m_crtcId,
                                   m_nextBuffer.fbId,

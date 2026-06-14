@@ -25,9 +25,11 @@ add_library(RLib-drm STATIC
 
 target_include_directories(RLib-drm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+target_include_directories(RLib-drm PUBLIC
+    ${DRM_INCLUDE_DIRS}
+)
 
 target_include_directories(RLib-drm PRIVATE
-    ${DRM_INCLUDE_DIRS}
     ${GBM_INCLUDE_DIRS}
     ${OPENGL_INCLUDE_DIRS}
 )

@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 
+#include <xf86drmMode.h>
+
 class LDrmDevice;
 struct LConnectorInfo;
 struct gbm_surface;
@@ -74,6 +76,8 @@ private:
 
     BufferContext m_currentBuffer;
     BufferContext m_nextBuffer;
+
+    drmModeModeInfo m_modeInfo;
 
     void *m_eglSurface = nullptr;
 };
