@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,6 +56,8 @@ public:
 
     gbm_device *gbmDevice() const;
     std::string deviceName() const;
+
+    std::optional<LConnectorInfo> getConnectorByName(const std::string &name) const;
 
 protected:
     //TODO register and unregister only by pointers?

@@ -229,6 +229,45 @@ std::string LDrmDevice::deviceName() const
     return name;
 }
 
+std::optional<LConnectorInfo> LDrmDevice::getConnectorByName(const std::string &name) const
+{
+    if (!isOpen())
+        return std::nullopt;
+
+    drmModeRes *resources = drmModeGetResources(m_fd);
+    if (!resources)
+        return std::nullopt;
+
+    for (int i = 0; i < resources->count_connectors; ++i) {
+        drmModeConnector *connector = drmModeGetConnector(m_fd, resources->connectors[i]);
+        if (!connector)
+            continue;
+
+        if (getConnectorName(connector) == name) {
+            LConnectorInfo info;
+            info.connectorId = connector->connector_id;
+            info.name = name;
+            info.connected = (connector->connection == DRM_MODE_CONNECTED);
+            info.displayPhysicalWidthMm = connector->mmWidth;
+            info.displayPhysicalHeightMm = connector->mmHeight;
+
+            if (info.connected && connector->count_modes > 0) {
+                info.displayWidth = connector->modes[0].hdisplay;
+                info.displayHeight = connector->modes[0].vdisplay;
+                info.displayRefreshRate = connector->modes[0].vrefresh;
+            }
+
+            drmModeFreeConnector(connector);
+            drmModeFreeResources(resources);
+            return info; // EARLY EXIT
+        }
+        drmModeFreeConnector(connector);
+    }
+
+    drmModeFreeResources(resources);
+    return std::nullopt;
+}
+
 void LDrmDevice::registerSurface(uint32_t crtcId, LScreenSurface *surface)
 {
     if (crtcId != 0 && surface != nullptr) {

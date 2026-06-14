@@ -27,15 +27,12 @@ void LScreenSurface::setupOutput(const std::string &screenName)
         return;
     }
 
-    auto connectors = m_device->connectedConnectors();
-    for (const auto &conn : connectors) {
-        if (conn.name == screenName) {
-            setupInternal(conn);
-            return;
-        }
+    auto connOpt = m_device->getConnectorByName(screenName);
+    if (connOpt.has_value()) {
+        setupInternal(connOpt.value());
+    } else {
+        std::cerr << "[LScreenSurface] [ERROR] Output " << screenName << " not found." << std::endl;
     }
-    std::cerr << "[LScreenSurface] [ERROR] Output " << screenName << " not found or disconnected."
-              << std::endl;
 }
 
 void LScreenSurface::setupInternal(const LConnectorInfo &screenInfo)
