@@ -16,6 +16,7 @@ add_library(RLib STATIC
     LTaskQueue.hpp
     LUnbufferedTcpSocket.hpp
     LUdpSocket.hpp
+    LIcmpSocket.hpp
 
     LByteRingBuffer.cpp
     LTimer.cpp
@@ -27,6 +28,7 @@ add_library(RLib STATIC
     LTaskQueue.cpp
     LUnbufferedTcpSocket.cpp
     LUdpSocket.cpp
+    LIcmpSocket.cpp
 )
 
 target_include_directories(RLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

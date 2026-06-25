@@ -23,6 +23,7 @@ add_executable(RLibTests
   test_ltimer.cpp
   test_ludpsocket.cpp
   test_ltcpsocket.cpp
+  test_licmpsocket.cpp
 )
 
 target_link_libraries(RLibTests
