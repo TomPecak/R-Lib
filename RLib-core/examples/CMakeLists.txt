@@ -10,11 +10,13 @@ add_executable(core-01-timer ltimer_exmaple.cpp)
 add_executable(core-02-udp_echo_server ludpsocket_udpechoserver.cpp)
 add_executable(core-03-udp_sender ludpsocket_udpsender.cpp)
 add_executable(core-04-tcp_echo_server tcp_echo_server.cpp)
+add_executable(core-05-icmp_ping licmpsocket_ping.cpp)
 
 target_link_libraries(core-01-timer PRIVATE RLib)
 target_link_libraries(core-02-udp_echo_server PRIVATE RLib)
 target_link_libraries(core-03-udp_sender PRIVATE RLib)
 target_link_libraries(core-04-tcp_echo_server PRIVATE RLib)
+target_link_libraries(core-05-icmp_ping PRIVATE RLib)
 
 
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -35,4 +37,7 @@ if(CMAKE_BUILD_TYPE MATCHES "Debug")
 
     target_compile_options(core-04-tcp_echo_server PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
     target_link_options(core-04-tcp_echo_server PRIVATE -fsanitize=address)
+
+    target_compile_options(core-05-icmp_ping PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
+    target_link_options(core-05-icmp_ping PRIVATE -fsanitize=address)
 endif()
